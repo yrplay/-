@@ -1,0 +1,22 @@
+{
+  "id": "/",
+  "name": "نظام محاسبة الدعاية والإعلان",
+  "short_name": "محاسبة إعلان",
+  "description": "نظام محاسبي متكامل لمحل دعاية وإعلان ومطبوعات وسندات مالية وحاسبة مقاسات",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "theme_color": "#0f172a",
+  "background_color": "#0f172a",
+  "lang": "ar",
+  "dir": "rtl",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

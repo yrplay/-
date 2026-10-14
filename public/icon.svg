@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#059669"/>
+      <stop offset="50%" stop-color="#0d9488"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="100%" stop-color="#38bdf8"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="128" fill="url(#bg)"/>
+  
+  <!-- Outer border accent -->
+  <rect x="16" y="16" width="480" height="480" rx="112" fill="none" stroke="rgba(255,255,255,0.15)" stroke-width="6"/>
+
+  <!-- Receipt/Invoice Icon Outline -->
+  <path d="M140 100 L372 100 C388 100 400 112 400 128 L400 400 L360 380 L320 400 L280 380 L240 400 L200 380 L160 400 L120 380 L120 128 C120 112 132 100 148 100 Z" 
+        fill="#ffffff" 
+        filter="drop-shadow(0 12px 24px rgba(0,0,0,0.35))"/>
+
+  <!-- Invoice Top Accent Header -->
+  <path d="M120 128 C120 112 132 100 148 100 L372 100 C388 100 400 112 400 128 L400 170 L120 170 Z" 
+        fill="url(#glow)"/>
+
+  <!-- CMYK / Advertising Printing Color Dots (Cyan, Magenta, Yellow, Key/Black) -->
+  <circle cx="170" cy="135" r="14" fill="#00ffff"/>
+  <circle cx="215" cy="135" r="14" fill="#ff00ff"/>
+  <circle cx="260" cy="135" r="14" fill="#ffea00"/>
+  <circle cx="305" cy="135" r="14" fill="#0f172a"/>
+
+  <!-- Accounting Lines -->
+  <rect x="160" y="210" width="200" height="16" rx="8" fill="#10b981"/>
+  <rect x="160" y="245" width="140" height="12" rx="6" fill="#94a3b8"/>
+  <rect x="160" y="275" width="190" height="12" rx="6" fill="#94a3b8"/>
+  <rect x="160" y="305" width="160" height="12" rx="6" fill="#94a3b8"/>
+
+  <!-- Stamp / Shield Seal Badge at bottom right -->
+  <circle cx="330" cy="330" r="42" fill="#059669"/>
+  <circle cx="330" cy="330" r="34" fill="#ffffff"/>
+  <path d="M318 330 L326 338 L344 320" fill="none" stroke="#059669" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

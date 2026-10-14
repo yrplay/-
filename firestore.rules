@@ -1,0 +1,51 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny all unmatched paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Connection test document
+    match /test/{docId} {
+      allow read, write: if true;
+    }
+
+    // Check if the user is authenticated
+    function isAuthorizedUser() {
+      return request.auth != null;
+    }
+
+    // Agency collaborative collections - strictly restricted to authenticated team accounts
+    match /sales/{saleId} {
+      allow read, write: if isAuthorizedUser();
+    }
+
+    match /purchases/{purchaseId} {
+      allow read, write: if isAuthorizedUser();
+    }
+
+    match /expenses/{expenseId} {
+      allow read, write: if isAuthorizedUser();
+    }
+
+    match /inventory/{inventoryId} {
+      allow read, write: if isAuthorizedUser();
+    }
+
+    match /quotations/{quotationId} {
+      allow read, write: if isAuthorizedUser();
+    }
+
+    match /vouchers/{voucherId} {
+      allow read, write: if isAuthorizedUser();
+    }
+
+    // Agency public branding settings (Agency Name, Logo, Subtitle, Phone, Address)
+    // Public read allows the login gate and public documents to immediately reflect the agency's custom branding
+    match /agency_settings/{settingsId} {
+      allow read: if true;
+      allow write: if isAuthorizedUser();
+    }
+  }
+}

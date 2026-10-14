@@ -1,0 +1,8 @@
+{
+  "name": "Remix نظام محاسبة الدعاية والإعلان",
+  "description": "نظام محاسبي متكامل لمحل دعاية وإعلان ومطبوعات متصل مع Google Sheets بالحسابات التلقائية والتقارير المالية",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

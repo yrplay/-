@@ -1,0 +1,141 @@
+{
+  "entities": {
+    "Sale": {
+      "title": "Sale Item",
+      "description": "Sales invoice and customer job order records",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "invoiceNo": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerPhone": { "type": "string" },
+        "serviceType": { "type": "string" },
+        "invoiceTotal": { "type": "number" },
+        "netTotal": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "remainingAmount": { "type": "number" },
+        "paymentStatus": { "type": "string" },
+        "orderStatus": { "type": "string" }
+      },
+      "required": ["id", "invoiceNo", "customerName"]
+    },
+    "Purchase": {
+      "title": "Purchase Item",
+      "description": "Supplier purchase invoices and materials procurement",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "supplierInvoiceNo": { "type": "string" },
+        "item": { "type": "string" },
+        "supplier": { "type": "string" },
+        "total": { "type": "number" },
+        "paidAmount": { "type": "number" },
+        "remainingAmount": { "type": "number" },
+        "paymentStatus": { "type": "string" }
+      },
+      "required": ["id", "item"]
+    },
+    "Expense": {
+      "title": "Expense Item",
+      "description": "Operating and administrative expenses",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "date": { "type": "string" },
+        "expenseType": { "type": "string" },
+        "category": { "type": "string" },
+        "amount": { "type": "number" },
+        "paymentMethod": { "type": "string" }
+      },
+      "required": ["id", "expenseType", "amount"]
+    },
+    "Inventory": {
+      "title": "Inventory Item",
+      "description": "Stock tracking for print materials and consumables",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "item": { "type": "string" },
+        "type": { "type": "string" },
+        "unit": { "type": "string" },
+        "currentQty": { "type": "number" },
+        "minQty": { "type": "number" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "item", "currentQty"]
+    },
+    "Quotation": {
+      "title": "Quotation Item",
+      "description": "Price quotations and proposals for customers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "quotationNo": { "type": "string" },
+        "customerName": { "type": "string" },
+        "subtotal": { "type": "number" },
+        "netTotal": { "type": "number" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "quotationNo", "customerName"]
+    },
+    "Voucher": {
+      "title": "Voucher Item",
+      "description": "Financial payment and receipt vouchers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "voucherNo": { "type": "string" },
+        "type": { "type": "string" },
+        "date": { "type": "string" },
+        "amount": { "type": "number" },
+        "partyName": { "type": "string" },
+        "paymentMethod": { "type": "string" },
+        "description": { "type": "string" }
+      },
+      "required": ["id", "voucherNo", "type", "amount", "partyName"]
+    },
+    "AgencySettings": {
+      "title": "Agency Settings",
+      "description": "Agency profile, branding, stamp, logo, and VAT configuration",
+      "type": "object",
+      "properties": {
+        "agencyName": { "type": "string" },
+        "agencySubtitle": { "type": "string" },
+        "agencyVatNumber": { "type": "string" },
+        "agencyPhone": { "type": "string" },
+        "agencyAddress": { "type": "string" }
+      },
+      "required": ["agencyName"]
+    }
+  },
+  "firestore": {
+    "/sales/{saleId}": {
+      "schema": { "$ref": "#/entities/Sale" },
+      "description": "Collection of all sales invoices and orders"
+    },
+    "/purchases/{purchaseId}": {
+      "schema": { "$ref": "#/entities/Purchase" },
+      "description": "Collection of supplier purchase invoices"
+    },
+    "/expenses/{expenseId}": {
+      "schema": { "$ref": "#/entities/Expense" },
+      "description": "Collection of operational expenses"
+    },
+    "/inventory/{inventoryId}": {
+      "schema": { "$ref": "#/entities/Inventory" },
+      "description": "Collection of inventory materials and stock items"
+    },
+    "/quotations/{quotationId}": {
+      "schema": { "$ref": "#/entities/Quotation" },
+      "description": "Collection of customer price quotations"
+    },
+    "/vouchers/{voucherId}": {
+      "schema": { "$ref": "#/entities/Voucher" },
+      "description": "Collection of receipt and payment financial vouchers"
+    },
+    "/agency_settings/{settingsId}": {
+      "schema": { "$ref": "#/entities/AgencySettings" },
+      "description": "Agency profile configuration and branding"
+    }
+  }
+}
