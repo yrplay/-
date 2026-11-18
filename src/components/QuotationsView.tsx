@@ -248,14 +248,16 @@ export const QuotationsView: React.FC<QuotationsViewProps> = ({
       return;
     }
 
+    const existingNos = quotations.map((x) => x.quotationNo);
     if (editingQuotation) {
       const updated = computeQuotationDerivedFields(
         { ...formData, id: editingQuotation.id, quotationNo: editingQuotation.quotationNo },
-        quotations.findIndex((q) => q.id === editingQuotation.id)
+        quotations.findIndex((q) => q.id === editingQuotation.id),
+        existingNos
       );
       onUpdateQuotation(updated);
     } else {
-      const newQuote = computeQuotationDerivedFields(formData, quotations.length);
+      const newQuote = computeQuotationDerivedFields(formData, quotations.length, existingNos);
       onAddQuotation(newQuote);
     }
     setIsModalOpen(false);

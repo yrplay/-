@@ -1,30 +1,23 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   FileText,
-  Plus,
   Search,
-  Filter,
   ArrowDownLeft,
   ArrowUpRight,
   Printer,
   Edit2,
   Trash2,
-  Calendar,
   X,
-  CheckCircle2,
   AlertCircle,
   Eye,
   EyeOff,
   Coins,
-  Wallet,
-  Receipt,
-  Building2,
   ArrowUpDown,
   Link2,
 } from 'lucide-react';
-import { VoucherItem, VoucherType, AgencySettings, UserRole, SaleItem } from '../types';
+import { VoucherItem, VoucherType, AgencySettings, UserRole, SaleItem, PurchaseItem } from '../types';
 import { tafqeet } from '../lib/tafqeet';
-import { computeSaleDerivedFields } from '../lib/dataStore';
+import { getNextSequenceNumber } from '../lib/dataStore';
 import { VoucherPrintModal } from './VoucherPrintModal';
 import { getTranslations } from '../lib/translations';
 
@@ -36,6 +29,7 @@ interface VouchersViewProps {
   currentUserName?: string;
   currentUserEmail?: string;
   sales?: SaleItem[];
+  purchases?: PurchaseItem[];
   onUpdateSale?: (sale: SaleItem) => void;
   onAddVoucher: (voucher: VoucherItem) => void;
   onUpdateVoucher: (voucher: VoucherItem) => void;
@@ -56,7 +50,7 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
   currentUserName = 'المستخدم',
   currentUserEmail = '',
   sales = [],
-  onUpdateSale,
+  purchases = [],
   onAddVoucher,
   onUpdateVoucher,
   onDeleteVoucher,
@@ -66,15 +60,13 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
 }) => {
   const t = getTranslations(currentLang);
   const isEn = currentLang === 'en';
-  // Filters & State
   const [filterType, setFilterType] = useState<FilterType>('ALL');
   const [searchTerm, setSearchTerm] = useState('');
-  const [sortBy, setSortBy] = useState<SortOption>('NEWEST'); // Default: newest first
+  const [sortBy, setSortBy] = useState<SortOption>('NEWEST');
   const [showSummaries, setShowSummaries] = useState<boolean>(() => {
     return localStorage.getItem('vouchers_show_summaries') !== 'false';
   });
 
-  // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingVoucher, setEditingVoucher] = useState<VoucherItem | null>(null);
   const [printVoucher, setPrintVoucher] = useState<VoucherItem | null>(null);
@@ -93,6 +85,7 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
   const [isInvoiceSettlement, setIsInvoiceSettlement] = useState<boolean>(false);
   const [autoUpdateInvoice, setAutoUpdateInvoice] = useState<boolean>(true);
   const [selectedSaleId, setSelectedSaleId] = useState<string>('');
+  const [selectedPurchaseId, setSelectedPurchaseId] = useState<string>('');
   const [description, setDescription] = useState('');
   const [receivedBy, setReceivedBy] = useState(currentUserName);
   const [approvedBy, setApprovedBy] = useState(agencySettings.agencyName || 'المدير العام');
@@ -107,12 +100,11 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
     });
   };
 
-  // Generate next voucher number
+  // توليد رقم سند تسلسلي ذري غير قابل للتكرار حتى بعد الحذف
   const generateVoucherNo = (type: VoucherType) => {
     const prefix = type === 'receipt' ? 'RC' : 'PV';
-    const sameTypeVouchers = vouchers.filter((v) => v.type === type);
-    const nextNum = 1000 + sameTypeVouchers.length + 1;
-    return `${prefix}-${nextNum}`;
+    const existing = vouchers.filter((v) => v.type === type).map((v) => v.voucherNo);
+    return getNextSequenceNumber(prefix, existing);
   };
 
   const handleOpenAddModal = (type: VoucherType = 'receipt') => {
@@ -130,7 +122,16 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
     setIsInvoiceSettlement(false);
     setAutoUpdateInvoice(true);
     setSelectedSaleId('');
-    setDescription(type === 'receipt' ? (isEn ? 'Payment on invoice / services' : 'دفعة على حساب فاتورة / خدمات') : (isEn ? 'Operating purchase / expense payment' : 'سداد مشتريات / مصاريف تشغيلية'));
+    setSelectedPurchaseId('');
+    setDescription(
+      type === 'receipt'
+        ? isEn
+          ? 'Payment on invoice / services'
+          : 'دفعة على حساب فاتورة / خدمات'
+        : isEn
+        ? 'Operating purchase / expense payment'
+        : 'سداد مشتريات / مصاريف تشغيلية'
+    );
     setReceivedBy(currentUserName);
     setApprovedBy(agencySettings.agencyName || (isEn ? 'Manager' : 'المدير'));
     setNotes('');
@@ -151,8 +152,9 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
     setReferenceNo(v.referenceNo || '');
     setRelatedInvoiceNo(v.relatedInvoiceNo || '');
     setIsInvoiceSettlement(Boolean(v.isInvoiceSettlement));
-    setAutoUpdateInvoice(false);
-    setSelectedSaleId('');
+    setAutoUpdateInvoice(true);
+    setSelectedSaleId(v.relatedDocType === 'sale' ? v.relatedDocId || '' : '');
+    setSelectedPurchaseId(v.relatedDocType === 'purchase' ? v.relatedDocId || '' : '');
     setDescription(v.description || '');
     setReceivedBy(v.receivedBy || currentUserName);
     setApprovedBy(v.approvedBy || (isEn ? 'Manager' : 'المدير'));
@@ -161,7 +163,6 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
     setIsModalOpen(true);
   };
 
-  // Automatically open Receipt Voucher modal if requested from SalesView
   useEffect(() => {
     if (initialSelectedSale) {
       setEditingVoucher(null);
@@ -171,7 +172,10 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
       setDate(new Date().toISOString().split('T')[0]);
       setPartyName(initialSelectedSale.customerName || '');
       setPartyPhone(initialSelectedSale.customerPhone || '');
-      const rem = initialSelectedSale.remainingAmount > 0 ? initialSelectedSale.remainingAmount : initialSelectedSale.netTotal;
+      const rem =
+        initialSelectedSale.remainingAmount > 0
+          ? initialSelectedSale.remainingAmount
+          : initialSelectedSale.netTotal;
       setAmount(rem);
       setAmountInWords(tafqeet(rem));
       setPaymentMethod(initialSelectedSale.paymentMethod || 'نقداً (كاش)');
@@ -180,6 +184,7 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
       setIsInvoiceSettlement(true);
       setAutoUpdateInvoice(true);
       setSelectedSaleId(initialSelectedSale.id);
+      setSelectedPurchaseId('');
       setDescription(
         isEn
           ? `Settlement payment for invoice ${initialSelectedSale.invoiceNo || initialSelectedSale.id} - ${initialSelectedSale.serviceType || ''}`
@@ -194,7 +199,6 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
     }
   }, [initialSelectedSale]);
 
-  // Helper when selecting an invoice to settle
   const handleSelectInvoice = (saleId: string) => {
     setSelectedSaleId(saleId);
     if (!saleId) {
@@ -218,7 +222,24 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
     }
   };
 
-  // Update amount in words automatically
+  const handleSelectPurchase = (purchId: string) => {
+    setSelectedPurchaseId(purchId);
+    if (!purchId) {
+      setIsInvoiceSettlement(false);
+      return;
+    }
+    const purch = purchases.find((p) => p.id === purchId);
+    if (purch) {
+      setIsInvoiceSettlement(true);
+      setRelatedInvoiceNo(purch.supplierInvoiceNo || purch.id);
+      setPartyName(purch.supplier || '');
+      const rem = purch.remainingAmount > 0 ? purch.remainingAmount : purch.total;
+      setAmount(rem);
+      setAmountInWords(tafqeet(rem));
+      setDescription(`سداد دفعة فاتورة مشتريات ${purch.supplierInvoiceNo || purch.id} - ${purch.item}`);
+    }
+  };
+
   const handleAmountChange = (val: number | '') => {
     setAmount(val);
     if (val !== '' && !isNaN(Number(val)) && Number(val) > 0) {
@@ -240,6 +261,27 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
       return;
     }
 
+    let relatedDocId: string | undefined;
+    let relatedDocType: VoucherItem['relatedDocType'];
+
+    if (voucherType === 'receipt' && (selectedSaleId || relatedInvoiceNo)) {
+      const targetSale = sales.find(
+        (s) => s.id === selectedSaleId || s.invoiceNo === relatedInvoiceNo || s.id === relatedInvoiceNo
+      );
+      if (targetSale) {
+        relatedDocId = targetSale.id;
+        relatedDocType = 'sale';
+      }
+    } else if (voucherType === 'payment' && (selectedPurchaseId || relatedInvoiceNo)) {
+      const targetPurch = purchases.find(
+        (p) => p.id === selectedPurchaseId || p.supplierInvoiceNo === relatedInvoiceNo || p.id === relatedInvoiceNo
+      );
+      if (targetPurch) {
+        relatedDocId = targetPurch.id;
+        relatedDocType = 'purchase';
+      }
+    }
+
     const payload: VoucherItem = {
       id: editingVoucher ? editingVoucher.id : `vouch-${Date.now()}`,
       voucherNo: voucherNo || generateVoucherNo(voucherType),
@@ -252,9 +294,19 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
       paymentMethod,
       referenceNo: referenceNo.trim() || '',
       relatedInvoiceNo: relatedInvoiceNo.trim() || '',
-      isInvoiceSettlement: isInvoiceSettlement,
-      autoUpdatedInvoice: isInvoiceSettlement && autoUpdateInvoice,
-      description: description.trim() || (voucherType === 'receipt' ? (isEn ? 'Receipt Voucher' : 'سند قبض') : (isEn ? 'Payment Voucher' : 'سند صرف')),
+      relatedDocId,
+      relatedDocType,
+      isInvoiceSettlement: Boolean(isInvoiceSettlement || relatedDocId),
+      autoUpdatedInvoice: Boolean(isInvoiceSettlement && autoUpdateInvoice),
+      description:
+        description.trim() ||
+        (voucherType === 'receipt'
+          ? isEn
+            ? 'Receipt Voucher'
+            : 'سند قبض'
+          : isEn
+          ? 'Payment Voucher'
+          : 'سند صرف'),
       receivedBy: receivedBy.trim() || '',
       approvedBy: approvedBy.trim() || '',
       notes: notes.trim() || '',
@@ -268,26 +320,7 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
       },
     };
 
-    // Auto update invoice if settlement checked
-    if (voucherType === 'receipt' && isInvoiceSettlement && autoUpdateInvoice && onUpdateSale) {
-      const targetSale = sales.find(
-        (s) => s.id === selectedSaleId || s.id === relatedInvoiceNo || s.invoiceNo === relatedInvoiceNo
-      );
-      if (targetSale) {
-        const curPaid = Number(targetSale.paidAmount) || 0;
-        const newPaid = Math.min(targetSale.netTotal, curPaid + numAmount);
-        const updated = computeSaleDerivedFields(
-          {
-            ...targetSale,
-            paidAmount: newPaid,
-            paymentMethod: paymentMethod || targetSale.paymentMethod,
-          },
-          0
-        );
-        onUpdateSale(updated);
-      }
-    }
-
+    // يتم تحديث الفاتورة/المشتريات تلقائياً في App.tsx عبر reconcileDocumentsWithVouchersAndReturns عند الإضافة أو التعديل أو الحذف
     if (editingVoucher) {
       onUpdateVoucher(payload);
     } else {
@@ -297,9 +330,7 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
     setIsModalOpen(false);
   };
 
-  // Filtered & Sorted vouchers
   const filteredAndSortedVouchers = useMemo(() => {
-    // 1. Filter
     const list = vouchers.filter((v) => {
       const matchType =
         filterType === 'ALL' ||
@@ -318,7 +349,6 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
       return matchType && matchSearch;
     });
 
-    // 2. Sort (Default is NEWEST first)
     return list.sort((a, b) => {
       if (sortBy === 'NEWEST') {
         const dateDiff = new Date(b.date).getTime() - new Date(a.date).getTime();
@@ -343,7 +373,6 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
     });
   }, [vouchers, filterType, searchTerm, sortBy]);
 
-  // Calculations for summary
   const totals = useMemo(() => {
     let receiptSum = 0;
     let paymentSum = 0;
@@ -356,7 +385,12 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
       if (v.type === 'receipt') {
         receiptSum += v.amount || 0;
         receiptCount++;
-        if (v.isInvoiceSettlement || (v.relatedInvoiceNo && sales.some((s) => s.id === v.relatedInvoiceNo || s.invoiceNo === v.relatedInvoiceNo))) {
+        if (
+          v.isInvoiceSettlement ||
+          v.relatedDocType === 'sale' ||
+          (v.relatedInvoiceNo &&
+            sales.some((s) => s.id === v.relatedInvoiceNo || s.invoiceNo === v.relatedInvoiceNo))
+        ) {
           settlementSum += v.amount || 0;
           settlementCount++;
         }
@@ -383,7 +417,6 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
 
   return (
     <div className="space-y-4">
-      {/* Viewer Mode Notice */}
       {userRole === 'viewer' && (
         <div className="bg-amber-50 border border-amber-200 text-amber-900 px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-2 font-bold shadow-xs">
           <Eye className="w-4 h-4 text-amber-600 shrink-0" />
@@ -403,19 +436,16 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
             {isEn
-              ? 'Issue receipt & payment vouchers, invoice settlements (non-doubled), and printed receipts'
-              : 'إصدار سندات قبض (استلام دفعات ومبالغ) وسندات صرف (مدفوعات ومشتريات) مع تسوية دفعات الفواتير دون تكرار'}
+              ? 'Issue receipt & payment vouchers with automatic bidirectional invoice & purchase settlement'
+              : 'إصدار سندات قبض وصرف مع ربط وتسوية تلقائية ثنائية الاتجاه للفواتير والمشتريات (تتحدث الأرصدة فوراً عند الإضافة أو التعديل أو الحذف)'}
           </p>
         </div>
 
-        {/* Buttons */}
         <div className="flex items-center flex-wrap gap-2">
-          {/* Toggle Summary Visibility */}
           <button
             type="button"
             onClick={toggleSummaries}
             className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold border border-slate-200 transition cursor-pointer"
-            title={showSummaries ? (isEn ? 'Hide KPI' : 'إخفاء بطاقات الإجماليات') : (isEn ? 'Show KPI' : 'إظهار بطاقات الإجماليات')}
           >
             {showSummaries ? (
               <>
@@ -430,7 +460,6 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
             )}
           </button>
 
-          {/* New Receipt Voucher (Hidden for Viewer) */}
           {userRole !== 'viewer' && (
             <>
               <button
@@ -455,10 +484,8 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
         </div>
       </div>
 
-      {/* KPI Cards (Collapsible for Clean, Simple UI) */}
       {showSummaries && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {/* Total Receipts */}
           <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-3 sm:p-4">
             <div className="flex items-center justify-between text-xs text-emerald-800 font-bold mb-1">
               <span className="flex items-center gap-1.5">
@@ -470,17 +497,20 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
               </span>
             </div>
             <div className="text-lg sm:text-xl font-extrabold text-emerald-900 font-mono">
-              {totals.receiptSum.toLocaleString('en-US', { minimumFractionDigits: 2 })} <span className="text-xs font-normal">{isEn ? 'SAR' : 'ر.س'}</span>
+              {totals.receiptSum.toLocaleString('en-US', { minimumFractionDigits: 2 })}{' '}
+              <span className="text-xs font-normal">{isEn ? 'SAR' : 'ر.س'}</span>
             </div>
             <div className="mt-1 pt-1 border-t border-emerald-200/60 text-[11px] text-emerald-800 flex items-center justify-between flex-wrap gap-1">
-              <span>{isEn ? 'Invoice Settlements:' : 'تسويات فواتير:'} <strong className="font-mono font-bold">{totals.settlementSum.toFixed(2)}</strong></span>
+              <span>
+                {isEn ? 'Invoice Settlements:' : 'تسويات فواتير:'}{' '}
+                <strong className="font-mono font-bold">{totals.settlementSum.toFixed(2)}</strong>
+              </span>
               <span className="text-[10px] bg-emerald-100/80 px-1.5 py-0.2 rounded font-semibold text-emerald-900">
-                {isEn ? 'Non-doubled in cash' : 'لا تكرر في الصندوق'}
+                {isEn ? 'Non-doubled in cash' : 'مترابطة مع الفواتير'}
               </span>
             </div>
           </div>
 
-          {/* Total Payments */}
           <div className="bg-rose-50/70 border border-rose-200 rounded-xl p-3 sm:p-4">
             <div className="flex items-center justify-between text-xs text-rose-800 font-bold mb-1">
               <span className="flex items-center gap-1.5">
@@ -492,12 +522,14 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
               </span>
             </div>
             <div className="text-lg sm:text-xl font-extrabold text-rose-900 font-mono">
-              {totals.paymentSum.toLocaleString('en-US', { minimumFractionDigits: 2 })} <span className="text-xs font-normal">{isEn ? 'SAR' : 'ر.س'}</span>
+              {totals.paymentSum.toLocaleString('en-US', { minimumFractionDigits: 2 })}{' '}
+              <span className="text-xs font-normal">{isEn ? 'SAR' : 'ر.س'}</span>
             </div>
-            <p className="text-[11px] text-rose-700 mt-0.5">{isEn ? 'Payments to suppliers & operating expenses' : 'مدفوعات للموردين والمصاريف التشغيلية'}</p>
+            <p className="text-[11px] text-rose-700 mt-0.5">
+              {isEn ? 'Payments to suppliers, returns & payroll' : 'مدفوعات للموردين والمرتجعات والرواتب'}
+            </p>
           </div>
 
-          {/* Net Cash Flow */}
           <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 sm:p-4">
             <div className="flex items-center justify-between text-xs text-slate-700 font-bold mb-1">
               <span className="flex items-center gap-1.5">
@@ -508,25 +540,29 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
                 {totals.totalCount} {isEn ? 'total' : 'إجمالي'}
               </span>
             </div>
-            <div className={`text-lg sm:text-xl font-extrabold font-mono ${totals.netCash >= 0 ? 'text-indigo-900' : 'text-rose-700'}`}>
-              {totals.netCash.toLocaleString('en-US', { minimumFractionDigits: 2 })} <span className="text-xs font-normal">{isEn ? 'SAR' : 'ر.س'}</span>
+            <div
+              className={`text-lg sm:text-xl font-extrabold font-mono ${
+                totals.netCash >= 0 ? 'text-indigo-900' : 'text-rose-700'
+              }`}
+            >
+              {totals.netCash.toLocaleString('en-US', { minimumFractionDigits: 2 })}{' '}
+              <span className="text-xs font-normal">{isEn ? 'SAR' : 'ر.س'}</span>
             </div>
-            <p className="text-[11px] text-slate-500 mt-0.5">{isEn ? 'Receipts minus payments' : 'الفارق بين المقبوض والمدفوع'}</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              {isEn ? 'Receipts minus payments' : 'الفارق بين المقبوض والمدفوع'}
+            </p>
           </div>
         </div>
       )}
 
       {/* Filter and Search Bar */}
       <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-3 text-xs">
-        {/* Type Filter Buttons */}
         <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
           <button
             type="button"
             onClick={() => setFilterType('ALL')}
             className={`px-2.5 py-1 rounded-md font-bold transition cursor-pointer ${
-              filterType === 'ALL'
-                ? 'bg-white text-slate-900 shadow-xs'
-                : 'text-slate-600 hover:text-slate-900'
+              filterType === 'ALL' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
             }`}
           >
             {isEn ? 'All' : 'الكل'}
@@ -546,39 +582,29 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
             type="button"
             onClick={() => setFilterType('PAYMENT')}
             className={`px-2.5 py-1 rounded-md font-bold transition cursor-pointer flex items-center gap-1 ${
-              filterType === 'PAYMENT'
-                ? 'bg-rose-600 text-white shadow-xs'
-                : 'text-rose-700 hover:bg-rose-50'
+              filterType === 'PAYMENT' ? 'bg-rose-600 text-white shadow-xs' : 'text-rose-700 hover:bg-rose-50'
             }`}
           >
             <span>{isEn ? 'Payment Vouchers' : 'سندات صرف'}</span>
           </button>
         </div>
 
-        {/* Search & Sort Controls */}
         <div className="flex items-center flex-wrap gap-2.5 flex-1 max-w-xl justify-end">
-          {/* Search Box */}
           <div className="relative flex-1 min-w-[180px]">
-            <Search className={`w-3.5 h-3.5 text-slate-400 absolute ${isEn ? 'left-2.5' : 'right-2.5'} top-2.5`} />
+            <Search
+              className={`w-3.5 h-3.5 text-slate-400 absolute ${isEn ? 'left-2.5' : 'right-2.5'} top-2.5`}
+            />
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder={isEn ? 'Search voucher #, party, description...' : 'بحث برقم السند، الطرف، البيان...'}
-              className={`w-full ${isEn ? 'pl-8 pr-3' : 'pl-3 pr-8'} py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500`}
+              className={`w-full ${
+                isEn ? 'pl-8 pr-3' : 'pl-3 pr-8'
+              } py-1.5 text-xs rounded-lg border border-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500`}
             />
-            {searchTerm && (
-              <button
-                type="button"
-                onClick={() => setSearchTerm('')}
-                className={`absolute ${isEn ? 'right-2.5' : 'left-2.5'} top-2.5 text-slate-400 hover:text-slate-600`}
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
           </div>
 
-          {/* Sort Dropdown */}
           <div className="flex items-center gap-1.5 shrink-0">
             <span className="text-slate-500 text-[11px] font-semibold flex items-center gap-1">
               <ArrowUpDown className="w-3 h-3 text-slate-400" />
@@ -587,9 +613,9 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
             <select
               value={sortBy}
               onChange={(e) => setSortBy(e.target.value as SortOption)}
-              className="px-2 py-1.5 text-xs rounded-lg border border-slate-200 bg-white font-bold text-slate-700 cursor-pointer focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              className="px-2 py-1.5 text-xs rounded-lg border border-slate-200 bg-white font-bold text-slate-700 cursor-pointer"
             >
-              <option value="NEWEST">{isEn ? 'Newest First' : 'الأحدث أولاً (تلقائي)'}</option>
+              <option value="NEWEST">{isEn ? 'Newest First' : 'الأحدث أولاً'}</option>
               <option value="OLDEST">{isEn ? 'Oldest First' : 'الأقدم أولاً'}</option>
               <option value="AMOUNT_DESC">{isEn ? 'Highest Amount' : 'الأعلى مبلغاً'}</option>
               <option value="AMOUNT_ASC">{isEn ? 'Lowest Amount' : 'الأقل مبلغاً'}</option>
@@ -608,7 +634,7 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
                 <th className="py-2.5 px-3">{isEn ? 'Voucher #' : 'رقم السند'}</th>
                 <th className="py-2.5 px-3">{isEn ? 'Date' : 'التاريخ'}</th>
                 <th className="py-2.5 px-3">{isEn ? 'Type' : 'النوع'}</th>
-                <th className="py-2.5 px-3">{isEn ? 'Party (Customer / Supplier)' : 'الطرف (المستلم / الدافع)'}</th>
+                <th className="py-2.5 px-3">{isEn ? 'Party' : 'الطرف (المستلم / الدافع)'}</th>
                 <th className="py-2.5 px-3">{isEn ? 'Description / Settlement' : 'البيان والتسوية'}</th>
                 <th className="py-2.5 px-3">{isEn ? 'Payment Method' : 'طريقة الدفع'}</th>
                 <th className="py-2.5 px-3 text-left">{isEn ? 'Amount' : 'المبلغ'}</th>
@@ -620,7 +646,11 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
                 <tr>
                   <td colSpan={8} className="py-8 text-center text-slate-400">
                     <FileText className="w-8 h-8 mx-auto mb-2 opacity-40 text-slate-400" />
-                    <span>{isEn ? 'No vouchers matching current filters' : 'لا توجد سندات مسجلة مطابقة للبحث أو التصفية الحالية'}</span>
+                    <span>
+                      {isEn
+                        ? 'No vouchers matching current filters'
+                        : 'لا توجد سندات مسجلة مطابقة للبحث أو التصفية الحالية'}
+                    </span>
                   </td>
                 </tr>
               ) : (
@@ -628,7 +658,6 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
                   const isReceipt = v.type === 'receipt';
                   return (
                     <tr key={v.id} className="hover:bg-slate-50/70 transition">
-                      {/* Voucher No */}
                       <td className="py-2.5 px-3 font-mono font-bold">
                         <span
                           className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold ${
@@ -640,13 +669,9 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
                           {v.voucherNo}
                         </span>
                       </td>
-
-                      {/* Date */}
                       <td className="py-2.5 px-3 text-slate-600 whitespace-nowrap font-mono text-[11px]">
                         {v.date}
                       </td>
-
-                      {/* Type Badge */}
                       <td className="py-2.5 px-3 whitespace-nowrap">
                         <span
                           className={`inline-flex items-center gap-1 text-[11px] font-bold ${
@@ -666,58 +691,44 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
                           )}
                         </span>
                       </td>
-
-                      {/* Party Name */}
                       <td className="py-2.5 px-3 font-bold text-slate-800 max-w-[160px] truncate">
                         <div>{v.partyName}</div>
                         {v.partyPhone && (
                           <div className="text-[10px] text-slate-400 font-mono">{v.partyPhone}</div>
                         )}
                       </td>
-
-                      {/* Description & Settlement info */}
                       <td className="py-2.5 px-3 text-slate-600 max-w-[220px]" title={v.description}>
                         <div className="truncate">{v.description}</div>
                         <div className="flex items-center gap-1 flex-wrap mt-0.5">
-                          {v.isInvoiceSettlement ? (
-                            <span
-                              className="text-[10px] text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded font-bold"
-                              title={isEn ? 'Invoice payment settlement - non-doubled in cash register' : 'تسوية دفعة فاتورة - لا يتكرر احتسابها في الصندوق'}
-                            >
-                              ✓ {isEn ? 'Settlement' : 'تسوية فاتورة'} {v.relatedInvoiceNo ? `#${v.relatedInvoiceNo}` : ''} ({isEn ? 'Non-doubled' : 'لا تكرر بالصندوق'})
+                          {v.isInvoiceSettlement || v.relatedDocId ? (
+                            <span className="text-[10px] text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded font-bold">
+                              ✓ تسوية مرتبطة {v.relatedInvoiceNo ? `#${v.relatedInvoiceNo}` : ''}
                             </span>
                           ) : v.relatedInvoiceNo ? (
                             <span className="text-[10px] text-indigo-600 bg-indigo-50 px-1.5 py-0.2 rounded font-mono">
-                              {isEn ? 'Invoice' : 'فاتورة'} {v.relatedInvoiceNo}
+                              مرجع {v.relatedInvoiceNo}
                             </span>
                           ) : null}
                         </div>
                       </td>
-
-                      {/* Payment Method */}
                       <td className="py-2.5 px-3 text-slate-600 whitespace-nowrap">
                         <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded text-[11px] font-medium">
-                          {v.paymentMethod || (isEn ? 'Cash' : 'نقداً')}
+                          {v.paymentMethod || 'نقداً'}
                         </span>
                         {v.referenceNo && (
                           <div className="text-[10px] text-slate-400 font-mono mt-0.5 truncate max-w-[100px]">
-                            {isEn ? 'Ref:' : 'مرجع:'} {v.referenceNo}
+                            مرجع: {v.referenceNo}
                           </div>
                         )}
                       </td>
-
-                      {/* Amount */}
                       <td className="py-2.5 px-3 text-left whitespace-nowrap font-mono font-black text-slate-900 text-xs">
                         <span className={isReceipt ? 'text-emerald-700' : 'text-rose-700'}>
                           {v.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}{' '}
                           <span className="text-[10px] font-normal text-slate-500">{isEn ? 'SAR' : 'ر.س'}</span>
                         </span>
                       </td>
-
-                      {/* Actions */}
                       <td className="py-2.5 px-3 text-center whitespace-nowrap">
                         <div className="inline-flex items-center gap-1">
-                          {/* Print Button */}
                           <button
                             type="button"
                             onClick={() => setPrintVoucher(v)}
@@ -727,7 +738,6 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
                             <Printer className="w-3.5 h-3.5" />
                           </button>
 
-                          {/* Edit and Delete Buttons (Hidden for Viewer) */}
                           {userRole !== 'viewer' && (
                             <>
                               <button
@@ -742,12 +752,16 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
                               <button
                                 type="button"
                                 onClick={() => {
-                                  if (confirm(`هل أنت متأكد من حذف السند (${v.voucherNo}) بقيمة ${v.amount} ر.س؟`)) {
+                                  if (
+                                    confirm(
+                                      `هل أنت متأكد من حذف السند (${v.voucherNo}) بقيمة ${v.amount} ر.س؟ (إذا كان مرتبطاً بفاتورة أو مشترى سيتم إعادة الرصيد المتبقي تلقائياً)`
+                                    )
+                                  ) {
                                     onDeleteVoucher(v.id);
                                   }
                                 }}
                                 className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition cursor-pointer"
-                                title="حذف السند"
+                                title="حذف السند وعكس التسوية تلقائياً"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
@@ -767,8 +781,7 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
       {/* Add / Edit Voucher Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-xs overflow-y-auto">
-          <div className="bg-white rounded-2xl shadow-2xl p-5 sm:p-6 max-w-lg w-full text-slate-900 border border-slate-200">
-            {/* Modal Header */}
+          <div className="bg-white rounded-2xl shadow-2xl p-5 sm:p-6 max-w-lg w-full text-slate-900 border border-slate-200 my-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
               <div className="flex items-center gap-2">
                 <div
@@ -802,7 +815,6 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
               </button>
             </div>
 
-            {/* Form Error */}
             {formError && (
               <div className="p-2 mb-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-lg text-xs flex items-center gap-1.5 font-bold">
                 <AlertCircle className="w-4 h-4 text-rose-500 shrink-0" />
@@ -811,7 +823,6 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
             )}
 
             <form onSubmit={handleSubmit} className="space-y-3.5 text-xs">
-              {/* Type Switcher (Only on New) */}
               {!editingVoucher && (
                 <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1 rounded-xl">
                   <button
@@ -819,6 +830,8 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
                     onClick={() => {
                       setVoucherType('receipt');
                       setVoucherNo(generateVoucherNo('receipt'));
+                      setSelectedSaleId('');
+                      setSelectedPurchaseId('');
                     }}
                     className={`py-2 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer ${
                       voucherType === 'receipt'
@@ -834,6 +847,8 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
                     onClick={() => {
                       setVoucherType('payment');
                       setVoucherNo(generateVoucherNo('payment'));
+                      setSelectedSaleId('');
+                      setSelectedPurchaseId('');
                     }}
                     className={`py-2 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer ${
                       voucherType === 'payment'
@@ -847,7 +862,6 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
                 </div>
               )}
 
-              {/* Date & Voucher No */}
               <div className="grid grid-cols-2 gap-2.5">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-700 mb-1">تاريخ السند</label>
@@ -856,26 +870,28 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
                     value={date}
                     onChange={(e) => setDate(e.target.value)}
                     required
-                    className="w-full p-2 text-xs rounded-lg border border-slate-300 focus:ring-1 focus:ring-emerald-500"
+                    className="w-full p-2 text-xs rounded-lg border border-slate-300"
                   />
                 </div>
                 <div>
-                  <label className="block text-[11px] font-bold text-slate-700 mb-1">رقم السند</label>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">رقم السند التسلسلي</label>
                   <input
                     type="text"
                     value={voucherNo}
                     onChange={(e) => setVoucherNo(e.target.value)}
                     required
-                    className="w-full p-2 text-xs rounded-lg border border-slate-300 bg-slate-50 font-mono font-bold focus:ring-1 focus:ring-emerald-500"
+                    className="w-full p-2 text-xs rounded-lg border border-slate-300 bg-slate-50 font-mono font-bold"
                   />
                 </div>
               </div>
 
-              {/* Party Name & Phone */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <div>
                   <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                    {voucherType === 'receipt' ? 'استلمنا من المكرم (العميل)' : 'صرفنا إلى المكرم (المورد / المستلم)'} *
+                    {voucherType === 'receipt'
+                      ? 'استلمنا من المكرم (العميل)'
+                      : 'صرفنا إلى المكرم (المورد / المستلم)'}{' '}
+                    *
                   </label>
                   <input
                     type="text"
@@ -883,7 +899,7 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
                     onChange={(e) => setPartyName(e.target.value)}
                     placeholder="اسم العميل أو المؤسسة أو المورد"
                     required
-                    className="w-full p-2 text-xs rounded-lg border border-slate-300 font-bold focus:ring-1 focus:ring-emerald-500"
+                    className="w-full p-2 text-xs rounded-lg border border-slate-300 font-bold"
                   />
                 </div>
                 <div>
@@ -893,12 +909,11 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
                     value={partyPhone}
                     onChange={(e) => setPartyPhone(e.target.value)}
                     placeholder="05XXXXXXXX"
-                    className="w-full p-2 text-xs rounded-lg border border-slate-300 font-mono focus:ring-1 focus:ring-emerald-500"
+                    className="w-full p-2 text-xs rounded-lg border border-slate-300 font-mono"
                   />
                 </div>
               </div>
 
-              {/* Amount & Tafqeet */}
               <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   <div>
@@ -913,7 +928,7 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
                       }
                       placeholder="0.00"
                       required
-                      className="w-full p-2 text-xs rounded-lg border border-slate-300 font-mono font-extrabold text-slate-900 focus:ring-1 focus:ring-emerald-500 bg-white"
+                      className="w-full p-2 text-xs rounded-lg border border-slate-300 font-mono font-extrabold text-slate-900 bg-white"
                     />
                   </div>
                   <div>
@@ -921,7 +936,7 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
                     <select
                       value={paymentMethod}
                       onChange={(e) => setPaymentMethod(e.target.value)}
-                      className="w-full p-2 text-xs rounded-lg border border-slate-300 bg-white font-semibold focus:ring-1 focus:ring-emerald-500"
+                      className="w-full p-2 text-xs rounded-lg border border-slate-300 bg-white font-semibold"
                     >
                       <option value="نقداً (كاش)">نقداً (كاش)</option>
                       <option value="شبكة مدى">شبكة مدى</option>
@@ -932,138 +947,99 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
                   </div>
                 </div>
 
-                {/* Amount in words */}
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 mb-0.5">
-                    تفقيط المبلغ بالكلمات (تلقائي وقابل للتعديل)
+                    تفقيط المبلغ بالكلمات (تلقائي)
                   </label>
                   <input
                     type="text"
                     value={amountInWords}
                     onChange={(e) => setAmountInWords(e.target.value)}
-                    placeholder="فقط ألف ريال سعودي لا غير..."
-                    className="w-full p-1.5 text-[11px] rounded-lg border border-slate-200 bg-white text-slate-700 font-semibold focus:ring-1 focus:ring-emerald-500"
+                    className="w-full p-1.5 text-[11px] rounded-lg border border-slate-200 bg-white text-slate-700 font-semibold"
                   />
                 </div>
               </div>
 
-              {/* Description (وذلك عن) */}
               <div>
-                <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                  البيان (وذلك عن...) *
-                </label>
+                <label className="block text-[11px] font-bold text-slate-700 mb-1">البيان (وذلك عن...) *</label>
                 <textarea
                   rows={2}
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="مثلاً: دفعة مقدمة لحساب طباعة بنرات، أو سداد متبقي فاتورة رقم..."
-                  className="w-full p-2 text-xs rounded-lg border border-slate-300 focus:ring-1 focus:ring-emerald-500"
+                  className="w-full p-2 text-xs rounded-lg border border-slate-300"
                 />
               </div>
 
-              {/* Intelligent Invoice Settlement & Link (سند تسوية دفعة فاتورة) */}
-              {voucherType === 'receipt' ? (
-                <div className="bg-indigo-50/70 p-3 rounded-xl border border-indigo-200/80 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <label className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
-                      <Link2 className="w-3.5 h-3.5 text-indigo-600" />
-                      <span>{isEn ? 'Link to Sales Invoice (Settlement)' : 'ربط بفاتورة مبيعات (تسوية دفعة)'}</span>
-                    </label>
-                    <span className="text-[10px] text-emerald-700 bg-emerald-100/70 border border-emerald-300 px-1.5 py-0.2 rounded font-bold">
-                      {isEn ? 'Non-doubled in treasury' : 'يمنع تكرار الاحتساب في الصندوق'}
+              {/* Settlement Section for both Sales Invoices and Purchase Bills */}
+              <div className="bg-indigo-50/70 p-3 rounded-xl border border-indigo-200/80 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+                    <Link2 className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>
+                      {voucherType === 'receipt'
+                        ? 'ربط وتسوية فاتورة مبيعات'
+                        : 'ربط وتسوية فاتورة مشتريات لمورد'}
                     </span>
-                  </div>
-
-                  {sales && sales.length > 0 && (
-                    <div>
-                      <select
-                        value={selectedSaleId}
-                        onChange={(e) => handleSelectInvoice(e.target.value)}
-                        className="w-full p-2 text-xs rounded-lg border border-indigo-300 bg-white font-semibold text-slate-800 focus:ring-1 focus:ring-indigo-500"
-                      >
-                        <option value="">{isEn ? '-- Select Invoice to Auto-fill & Settle --' : '-- اختر الفاتورة لتعبئة البيانات وتفادي التدبيل --'}</option>
-                        {sales.map((s) => (
-                          <option key={s.id} value={s.id}>
-                            {s.invoiceNo || s.id} - {s.customerName} ({isEn ? 'Remaining:' : 'المتبقي:'} {s.remainingAmount} {isEn ? 'SAR' : 'ر.س'}) • {s.paymentStatus}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  )}
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-0.5">{isEn ? 'Invoice #' : 'رقم الفاتورة المرتبطة'}</label>
-                      <input
-                        type="text"
-                        value={relatedInvoiceNo}
-                        onChange={(e) => setRelatedInvoiceNo(e.target.value)}
-                        placeholder="INV-1001"
-                        className="w-full p-1.5 text-xs rounded-lg border border-slate-300 font-mono bg-white"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-bold text-slate-600 mb-0.5">{isEn ? 'Reference / Check #' : 'رقم المرجع / الشيك'}</label>
-                      <input
-                        type="text"
-                        value={referenceNo}
-                        onChange={(e) => setReferenceNo(e.target.value)}
-                        placeholder={isEn ? 'Ref #' : 'رقم الحوالة أو الشيك'}
-                        className="w-full p-1.5 text-xs rounded-lg border border-slate-300 font-mono bg-white"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="flex flex-col gap-1.5 pt-1 border-t border-indigo-100">
-                    <label className="flex items-center gap-2 cursor-pointer text-[11px] font-bold text-indigo-900 select-none">
-                      <input
-                        type="checkbox"
-                        checked={isInvoiceSettlement}
-                        onChange={(e) => setIsInvoiceSettlement(e.target.checked)}
-                        className="rounded text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer"
-                      />
-                      <span>{isEn ? 'Mark as Invoice Settlement (Do not double count in Cash Treasury)' : 'اعتماد السند كتسوية دفعة فاتورة (عدم تدبيل المبلغ في الصندوق والخزينة)'}</span>
-                    </label>
-
-                    {isInvoiceSettlement && (
-                      <label className="flex items-center gap-2 cursor-pointer text-[11px] font-bold text-emerald-800 select-none bg-emerald-50/80 p-1.5 rounded-lg border border-emerald-200">
-                        <input
-                          type="checkbox"
-                          checked={autoUpdateInvoice}
-                          onChange={(e) => setAutoUpdateInvoice(e.target.checked)}
-                          className="rounded text-emerald-600 focus:ring-emerald-500 w-3.5 h-3.5 cursor-pointer"
-                        />
-                        <span>{isEn ? 'Auto-update invoice paid amount & mark paid' : 'تحديث المدفوع في الفاتورة تلقائياً وتغيير حالتها إلى مسدد'}</span>
-                      </label>
-                    )}
-                  </div>
+                  </label>
+                  <span className="text-[10px] text-emerald-700 bg-emerald-100/70 border border-emerald-300 px-1.5 py-0.2 rounded font-bold">
+                    تحديث آلي للرصيد ذهاباً وإياباً
+                  </span>
                 </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-2.5">
+
+                {voucherType === 'receipt' && sales.length > 0 && (
+                  <select
+                    value={selectedSaleId}
+                    onChange={(e) => handleSelectInvoice(e.target.value)}
+                    className="w-full p-2 text-xs rounded-lg border border-indigo-300 bg-white font-semibold text-slate-800"
+                  >
+                    <option value="">-- اختر فاتورة المبيعات لتسويتها تلقائياً --</option>
+                    {sales.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.invoiceNo || s.id} - {s.customerName} (المتبقي: {s.remainingAmount} ر.س) • {s.paymentStatus}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                {voucherType === 'payment' && purchases.length > 0 && (
+                  <select
+                    value={selectedPurchaseId}
+                    onChange={(e) => handleSelectPurchase(e.target.value)}
+                    className="w-full p-2 text-xs rounded-lg border border-indigo-300 bg-white font-semibold text-slate-800"
+                  >
+                    <option value="">-- اختر فاتورة المشتريات لتسويتها تلقائياً --</option>
+                    {purchases.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.supplierInvoiceNo || p.id} - {p.supplier} (المتبقي: {p.remainingAmount} ر.س) • {p.paymentStatus}
+                      </option>
+                    ))}
+                  </select>
+                )}
+
+                <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-600 mb-0.5">{isEn ? 'Reference / Check #' : 'رقم المرجع / الشيك (اختياري)'}</label>
-                    <input
-                      type="text"
-                      value={referenceNo}
-                      onChange={(e) => setReferenceNo(e.target.value)}
-                      placeholder={isEn ? 'Check / Ref' : 'رقم الحوالة أو الشيك'}
-                      className="w-full p-1.5 text-xs rounded-lg border border-slate-300 font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-600 mb-0.5">{isEn ? 'Related Invoice / Bill #' : 'رقم الفاتورة المرتبطة (اختياري)'}</label>
+                    <label className="block text-[10px] font-bold text-slate-600 mb-0.5">رقم الفاتورة المرتبطة</label>
                     <input
                       type="text"
                       value={relatedInvoiceNo}
                       onChange={(e) => setRelatedInvoiceNo(e.target.value)}
-                      placeholder="BILL-1002"
-                      className="w-full p-1.5 text-xs rounded-lg border border-slate-300 font-mono"
+                      placeholder="INV-2026-0001"
+                      className="w-full p-1.5 text-xs rounded-lg border border-slate-300 font-mono bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 mb-0.5">رقم المرجع / الشيك</label>
+                    <input
+                      type="text"
+                      value={referenceNo}
+                      onChange={(e) => setReferenceNo(e.target.value)}
+                      placeholder="رقم الحوالة أو الشيك"
+                      className="w-full p-1.5 text-xs rounded-lg border border-slate-300 font-mono bg-white"
                     />
                   </div>
                 </div>
-              )}
+              </div>
 
-              {/* Signatures */}
               <div className="grid grid-cols-2 gap-2.5 pt-1">
                 <div>
                   <label className="block text-[10px] font-bold text-slate-600 mb-0.5">اسم المستلم / أمين الصندوق</label>
@@ -1071,7 +1047,6 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
                     type="text"
                     value={receivedBy}
                     onChange={(e) => setReceivedBy(e.target.value)}
-                    placeholder="أمين الصندوق"
                     className="w-full p-1.5 text-xs rounded-lg border border-slate-300"
                   />
                 </div>
@@ -1081,25 +1056,25 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
                     type="text"
                     value={approvedBy}
                     onChange={(e) => setApprovedBy(e.target.value)}
-                    placeholder="المدير المالي"
                     className="w-full p-1.5 text-xs rounded-lg border border-slate-300"
                   />
                 </div>
               </div>
 
-              {/* Modal Buttons */}
               <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setIsModalOpen(false)}
-                  className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold cursor-pointer transition"
+                  className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold cursor-pointer"
                 >
                   إلغاء
                 </button>
                 <button
                   type="submit"
-                  className={`px-4 py-1.5 rounded-lg text-white font-bold shadow-xs cursor-pointer transition ${
-                    voucherType === 'receipt' ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-rose-600 hover:bg-rose-700'
+                  className={`px-4 py-1.5 rounded-lg text-white font-bold shadow-xs cursor-pointer ${
+                    voucherType === 'receipt'
+                      ? 'bg-emerald-600 hover:bg-emerald-700'
+                      : 'bg-rose-600 hover:bg-rose-700'
                   }`}
                 >
                   {editingVoucher ? 'تحديث السند' : 'حفظ وإصدار السند'}
@@ -1110,7 +1085,6 @@ export const VouchersView: React.FC<VouchersViewProps> = ({
         </div>
       )}
 
-      {/* Printable Voucher Modal */}
       <VoucherPrintModal
         voucher={printVoucher}
         isOpen={Boolean(printVoucher)}

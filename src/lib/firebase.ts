@@ -2,7 +2,6 @@ import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
 import {
   getAuth,
   signInWithPopup,
-  signInAnonymously,
   GoogleAuthProvider,
   onAuthStateChanged,
   signOut,
@@ -15,22 +14,19 @@ import firebaseConfig from '../../firebase-applet-config.json';
 const app: FirebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
 export const auth: Auth = getAuth(app);
 
-// Use explicit firestoreDatabaseId if configured
 export const db: Firestore = (firebaseConfig as any).firestoreDatabaseId
   ? getFirestore(app, (firebaseConfig as any).firestoreDatabaseId)
   : getFirestore(app);
 
-// Test Firestore connection on boot as required by system skill
 export async function testConnection() {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error: any) {
-    // Gracefully handle any connection errors without unhandled rejection
+  } catch {
+    // Gracefully handle connection checks
   }
 }
 testConnection();
 
-// Ensure the client has an active authenticated Firebase user session
 export const ensureAuthSession = async (): Promise<User | null> => {
   if (auth.currentUser && !auth.currentUser.isAnonymous) {
     return auth.currentUser;
@@ -55,29 +51,34 @@ provider.setCustomParameters({
   prompt: 'select_account',
 });
 
-// Flag to indicate if we are in the middle of a sign-in flow.
-let isSigningIn = false;
-// Cache the access token in memory and persist in localStorage for Google Sheets & Drive API operations
-const STORAGE_KEY_GOOGLE_ACCESS_TOKEN = 'pos_google_access_token_v1';
-const STORAGE_KEY_GOOGLE_TOKEN_EXPIRY = 'pos_google_token_expiry_v1';
+// تخزين رمز الوصول في sessionStorage فقط لحمايته من هجمات XSS ومنع بقائه الدائم في المتصفح
+const SESSION_KEY_GOOGLE_ACCESS_TOKEN = 'pos_google_access_token_session_v2';
+const SESSION_KEY_GOOGLE_TOKEN_EXPIRY = 'pos_google_token_expiry_session_v2';
+
+// تنظيف أي رموز قديمة كانت مخزنة في localStorage من الإصدار السابق
+try {
+  localStorage.removeItem('pos_google_access_token_v1');
+  localStorage.removeItem('pos_google_token_expiry_v1');
+} catch {
+  // ignore
+}
 
 let cachedAccessToken: string | null = null;
 try {
-  const stored = localStorage.getItem(STORAGE_KEY_GOOGLE_ACCESS_TOKEN);
-  const expiry = localStorage.getItem(STORAGE_KEY_GOOGLE_TOKEN_EXPIRY);
+  const stored = sessionStorage.getItem(SESSION_KEY_GOOGLE_ACCESS_TOKEN);
+  const expiry = sessionStorage.getItem(SESSION_KEY_GOOGLE_TOKEN_EXPIRY);
   if (stored) {
     if (!expiry || Date.now() < Number(expiry)) {
       cachedAccessToken = stored;
     } else {
-      localStorage.removeItem(STORAGE_KEY_GOOGLE_ACCESS_TOKEN);
-      localStorage.removeItem(STORAGE_KEY_GOOGLE_TOKEN_EXPIRY);
+      sessionStorage.removeItem(SESSION_KEY_GOOGLE_ACCESS_TOKEN);
+      sessionStorage.removeItem(SESSION_KEY_GOOGLE_TOKEN_EXPIRY);
     }
   }
-} catch (e) {
-  // localStorage might be unavailable or restricted
+} catch {
+  // sessionStorage might be unavailable
 }
 
-// Initialize auth state listener. Call this on app load.
 export const initAuth = (
   onAuthChange: (user: User | null, token: string | null) => void
 ) => {
@@ -85,12 +86,12 @@ export const initAuth = (
     if (user && !user.isAnonymous) {
       if (!cachedAccessToken) {
         try {
-          const stored = localStorage.getItem(STORAGE_KEY_GOOGLE_ACCESS_TOKEN);
-          const expiry = localStorage.getItem(STORAGE_KEY_GOOGLE_TOKEN_EXPIRY);
+          const stored = sessionStorage.getItem(SESSION_KEY_GOOGLE_ACCESS_TOKEN);
+          const expiry = sessionStorage.getItem(SESSION_KEY_GOOGLE_TOKEN_EXPIRY);
           if (stored && (!expiry || Date.now() < Number(expiry))) {
             cachedAccessToken = stored;
           }
-        } catch (e) {
+        } catch {
           // ignore
         }
       }
@@ -98,9 +99,9 @@ export const initAuth = (
     } else {
       cachedAccessToken = null;
       try {
-        localStorage.removeItem(STORAGE_KEY_GOOGLE_ACCESS_TOKEN);
-        localStorage.removeItem(STORAGE_KEY_GOOGLE_TOKEN_EXPIRY);
-      } catch (e) {
+        sessionStorage.removeItem(SESSION_KEY_GOOGLE_ACCESS_TOKEN);
+        sessionStorage.removeItem(SESSION_KEY_GOOGLE_TOKEN_EXPIRY);
+      } catch {
         // ignore
       }
       onAuthChange(null, null);
@@ -108,10 +109,8 @@ export const initAuth = (
   });
 };
 
-// Must be called from a button click or user interaction
 export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
   try {
-    isSigningIn = true;
     const result = await signInWithPopup(auth, provider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
@@ -120,36 +119,34 @@ export const googleSignIn = async (): Promise<{ user: User; accessToken: string 
 
     cachedAccessToken = credential.accessToken;
     try {
-      const expiresInMs = 3500 * 1000; // ~1 hour validity
-      localStorage.setItem(STORAGE_KEY_GOOGLE_ACCESS_TOKEN, cachedAccessToken);
-      localStorage.setItem(STORAGE_KEY_GOOGLE_TOKEN_EXPIRY, (Date.now() + expiresInMs).toString());
+      const expiresInMs = 3500 * 1000;
+      sessionStorage.setItem(SESSION_KEY_GOOGLE_ACCESS_TOKEN, cachedAccessToken);
+      sessionStorage.setItem(SESSION_KEY_GOOGLE_TOKEN_EXPIRY, (Date.now() + expiresInMs).toString());
     } catch (e) {
-      console.warn('Could not persist Google access token to localStorage:', e);
+      console.warn('Could not persist Google access token to sessionStorage:', e);
     }
     return { user: result.user, accessToken: cachedAccessToken };
   } catch (error: any) {
     console.error('Sign in error:', error);
     throw error;
-  } finally {
-    isSigningIn = false;
   }
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
   if (!cachedAccessToken) {
     try {
-      const stored = localStorage.getItem(STORAGE_KEY_GOOGLE_ACCESS_TOKEN);
-      const expiry = localStorage.getItem(STORAGE_KEY_GOOGLE_TOKEN_EXPIRY);
+      const stored = sessionStorage.getItem(SESSION_KEY_GOOGLE_ACCESS_TOKEN);
+      const expiry = sessionStorage.getItem(SESSION_KEY_GOOGLE_TOKEN_EXPIRY);
       if (stored) {
         if (!expiry || Date.now() < Number(expiry)) {
           cachedAccessToken = stored;
         } else {
           cachedAccessToken = null;
-          localStorage.removeItem(STORAGE_KEY_GOOGLE_ACCESS_TOKEN);
-          localStorage.removeItem(STORAGE_KEY_GOOGLE_TOKEN_EXPIRY);
+          sessionStorage.removeItem(SESSION_KEY_GOOGLE_ACCESS_TOKEN);
+          sessionStorage.removeItem(SESSION_KEY_GOOGLE_TOKEN_EXPIRY);
         }
       }
-    } catch (e) {
+    } catch {
       // ignore
     }
   }
@@ -159,9 +156,9 @@ export const getAccessToken = async (): Promise<string | null> => {
 export const clearCachedAccessToken = () => {
   cachedAccessToken = null;
   try {
-    localStorage.removeItem(STORAGE_KEY_GOOGLE_ACCESS_TOKEN);
-    localStorage.removeItem(STORAGE_KEY_GOOGLE_TOKEN_EXPIRY);
-  } catch (e) {
+    sessionStorage.removeItem(SESSION_KEY_GOOGLE_ACCESS_TOKEN);
+    sessionStorage.removeItem(SESSION_KEY_GOOGLE_TOKEN_EXPIRY);
+  } catch {
     // ignore
   }
 };
@@ -170,11 +167,11 @@ export const setCachedAccessToken = (token: string | null) => {
   cachedAccessToken = token;
   try {
     if (token) {
-      localStorage.setItem(STORAGE_KEY_GOOGLE_ACCESS_TOKEN, token);
+      sessionStorage.setItem(SESSION_KEY_GOOGLE_ACCESS_TOKEN, token);
     } else {
-      localStorage.removeItem(STORAGE_KEY_GOOGLE_ACCESS_TOKEN);
+      sessionStorage.removeItem(SESSION_KEY_GOOGLE_ACCESS_TOKEN);
     }
-  } catch (e) {
+  } catch {
     // ignore
   }
 };
@@ -183,8 +180,9 @@ export const logout = async () => {
   await signOut(auth);
   cachedAccessToken = null;
   try {
-    localStorage.removeItem(STORAGE_KEY_GOOGLE_ACCESS_TOKEN);
-  } catch (e) {
+    sessionStorage.removeItem(SESSION_KEY_GOOGLE_ACCESS_TOKEN);
+    sessionStorage.removeItem(SESSION_KEY_GOOGLE_TOKEN_EXPIRY);
+  } catch {
     // ignore
   }
 };

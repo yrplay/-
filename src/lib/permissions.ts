@@ -1,105 +1,87 @@
 import { User } from 'firebase/auth';
-import { UserRole, AgencySettings, Collaborator } from '../types';
+import { UserRole, AgencySettings, NavigationTab } from '../types';
 
-export type NavigationTab =
-  | 'dashboard'
-  | 'quotations'
-  | 'sales'
-  | 'vouchers'
-  | 'purchases'
-  | 'expenses'
-  | 'inventory'
-  | 'pricing';
+export type { NavigationTab };
 
-export const PRIMARY_OWNER_EMAIL = 'yr.play.com@gmail.com';
+// لم يعد هناك بريد إلكتروني مثبت في الكود المصدري؛ يتم تعيين المالك ديناميكياً من إعدادات الوكالة أو أول تسجيل دخول
+export const PRIMARY_OWNER_EMAIL = '';
 
 export const ALL_NAVIGATION_TABS: { id: NavigationTab; label: string; iconLabel: string }[] = [
   { id: 'dashboard', label: 'لوحة المؤشرات والأرباح', iconLabel: '📊' },
   { id: 'quotations', label: 'عروض الأسعار', iconLabel: '📋' },
   { id: 'sales', label: 'المبيعات والفواتير', iconLabel: '💰' },
+  { id: 'returns', label: 'المرتجعات وإشعارات الدائن', iconLabel: '↩️' },
   { id: 'vouchers', label: 'السندات (قبض وصرف)', iconLabel: '📄' },
   { id: 'purchases', label: 'المشتريات والموردين', iconLabel: '🛒' },
   { id: 'expenses', label: 'المصروفات التشغيلية', iconLabel: '💸' },
   { id: 'inventory', label: 'إدارة المستودع والمخزون', iconLabel: '📦' },
+  { id: 'hr', label: 'الموارد البشرية والرواتب', iconLabel: '👥' },
   { id: 'pricing', label: 'حاسبة المقاسات والأسعار', iconLabel: '📐' },
 ];
 
 export const DEFAULT_ROLE_TABS: Record<string, NavigationTab[]> = {
-  'مالك (Owner)': ['dashboard', 'quotations', 'sales', 'vouchers', 'purchases', 'expenses', 'inventory', 'pricing'],
-  'مدير (Admin)': ['dashboard', 'quotations', 'sales', 'vouchers', 'purchases', 'expenses', 'inventory', 'pricing'],
-  'محاسب (Accountant)': ['dashboard', 'quotations', 'sales', 'vouchers', 'purchases', 'expenses'],
-  'مسوق ومندوب مبيعات (Sales Rep)': ['quotations', 'sales', 'pricing'],
-  'أمين مستودع (Warehouse Keeper)': ['inventory', 'purchases'],
-  'محرر (Editor)': ['quotations', 'sales', 'vouchers', 'inventory', 'pricing'],
+  'مالك (Owner)': ['dashboard', 'quotations', 'sales', 'returns', 'vouchers', 'purchases', 'expenses', 'inventory', 'hr', 'pricing'],
+  'مدير (Admin)': ['dashboard', 'quotations', 'sales', 'returns', 'vouchers', 'purchases', 'expenses', 'inventory', 'hr', 'pricing'],
+  'محاسب (Accountant)': ['dashboard', 'quotations', 'sales', 'returns', 'vouchers', 'purchases', 'expenses', 'hr'],
+  'مسوق ومندوب مبيعات (Sales Rep)': ['quotations', 'sales', 'returns', 'pricing'],
+  'أمين مستودع (Warehouse Keeper)': ['inventory', 'purchases', 'returns'],
+  'محرر (Editor)': ['quotations', 'sales', 'returns', 'vouchers', 'inventory', 'pricing'],
   'مشاهد (Viewer)': ['pricing'],
   'مخصص (Custom)': ['quotations', 'sales', 'vouchers'],
 };
 
 /**
- * Checks if the user is the primary system owner based on known email,
- * agencySettings.ownerEmail, or agencySettings.userProfile.email.
- * Always protects against accidental lockouts even across devices or remixes.
+ * Checks if the user is the primary system owner based on agencySettings.ownerEmail
+ * or agencySettings.userProfile.email, without any hardcoded backdoor email.
  */
 export function isPrimaryOwner(user: User | null, agencySettings?: AgencySettings): boolean {
   if (!user) {
-    // If not logged in yet, default local user is considered owner
     return true;
   }
 
   const userEmail = (user.email || '').toLowerCase().trim();
   if (!userEmail) return true;
 
-  // 1. Hardcoded primary owner account
-  if (userEmail === PRIMARY_OWNER_EMAIL.toLowerCase().trim()) {
-    return true;
-  }
-
-  // 2. Explicit ownerEmail stored in agency settings
   if (agencySettings?.ownerEmail && agencySettings.ownerEmail.toLowerCase().trim() === userEmail) {
     return true;
   }
 
-  // 3. UserProfile email in agency settings
   if (agencySettings?.userProfile?.email && agencySettings.userProfile.email.toLowerCase().trim() === userEmail) {
     return true;
   }
 
-  // 4. Check if user was explicitly registered as a restricted employee
   if (agencySettings?.collaborators && agencySettings.collaborators.length > 0) {
     const matchedCollab = agencySettings.collaborators.find(
       (c) => c.email.toLowerCase().trim() === userEmail
     );
     if (matchedCollab) {
       const r = matchedCollab.role;
-      if (r.includes('مالك') || r.includes('Owner') || r.includes('مدير') || r.includes('Admin')) {
+      if (r.includes('مالك') || r.includes('Owner')) {
         return true;
       }
       return false;
     }
   }
 
-  // 5. By default, any authenticated user running this agency instance is the owner
-  return true;
+  // إذا لم يتم تعيين مالك بعد في الإعدادات ولم يكن المستخدم ضمن الموظفين المقيدين، يعتبر هو المالك الأول للنظام
+  if (!agencySettings?.ownerEmail && (!agencySettings?.collaborators || agencySettings.collaborators.length === 0)) {
+    return true;
+  }
+
+  return false;
 }
 
-/**
- * Determines effective UserRole based on current Firebase user and agency settings.
- * Guaranteed to default to 'owner' so the owner is never demoted to 'editor'.
- */
 export function getUserRole(user: User | null, agencySettings?: AgencySettings): UserRole {
-  // If not logged in, treat as local owner
   if (!user) {
     return 'owner';
   }
 
-  // Primary owner always has 'owner' role
   if (isPrimaryOwner(user, agencySettings)) {
     return 'owner';
   }
 
   const userEmail = (user.email || '').toLowerCase().trim();
 
-  // Check if collaborator in agencySettings
   if (agencySettings?.collaborators && agencySettings.collaborators.length > 0) {
     const matchedCollab = agencySettings.collaborators.find(
       (c) => c.email.toLowerCase().trim() === userEmail
@@ -115,21 +97,20 @@ export function getUserRole(user: User | null, agencySettings?: AgencySettings):
       if (r.includes('مشاهد') || r.includes('Viewer')) return 'viewer';
       if (r.includes('محرر') || r.includes('Editor')) return 'editor';
     }
+    // إذا كان هناك مالك مسجل وفريق عمل، وأي مستخدم خارج الفريق يدخل، يحصل على صلاحية مشاهد فقط للأمان
+    if (agencySettings.ownerEmail) {
+      return 'viewer';
+    }
   }
 
-  // Always default to owner, never revert to editor
   return 'owner';
 }
 
-/**
- * Returns the list of navigation tabs permitted for a given role and collaborator.
- */
 export function getAllowedTabs(
   role: UserRole,
   user?: User | null,
   agencySettings?: AgencySettings
 ): NavigationTab[] {
-  // Check if collaborator has explicit customPermissions configured
   if (user && agencySettings?.collaborators) {
     const userEmail = (user.email || '').toLowerCase().trim();
     const matchedCollab = agencySettings.collaborators.find(
@@ -142,60 +123,53 @@ export function getAllowedTabs(
 
   switch (role) {
     case 'warehouse':
-      return ['inventory', 'purchases'];
+      return ['inventory', 'purchases', 'returns'];
     case 'sales':
-      return ['quotations', 'sales', 'pricing'];
+      return ['quotations', 'sales', 'returns', 'pricing'];
     case 'accountant':
-      // المحاسب محصور في العمليات المالية وعروض الأسعار والسندات مع حجب المستودع والمخزون نهائياً
-      return ['dashboard', 'quotations', 'sales', 'vouchers', 'purchases', 'expenses'];
+      return ['dashboard', 'quotations', 'sales', 'returns', 'vouchers', 'purchases', 'expenses', 'hr'];
     case 'editor':
-      return ['quotations', 'sales', 'vouchers', 'inventory', 'pricing'];
+      return ['quotations', 'sales', 'returns', 'vouchers', 'inventory', 'pricing'];
     case 'viewer':
       return ['pricing'];
     case 'admin':
     case 'owner':
     default:
-      return ['dashboard', 'quotations', 'sales', 'vouchers', 'purchases', 'expenses', 'inventory', 'pricing'];
+      return ['dashboard', 'quotations', 'sales', 'returns', 'vouchers', 'purchases', 'expenses', 'inventory', 'hr', 'pricing'];
   }
 }
 
-/**
- * Check if the user role can create records (invoices, quotes, expenses, etc.).
- * Viewers can NEVER add or create anything.
- */
-export function canCreateItem(role: UserRole): boolean {
-  return role !== 'viewer';
+export function canCreateItem(role?: UserRole | string): boolean {
+  return role !== 'viewer' && !String(role || '').includes('مشاهد');
 }
 
-/**
- * Check if the user role can edit records.
- * Viewers can NEVER edit anything.
- */
-export function canEditItem(role: UserRole): boolean {
-  return role !== 'viewer';
+export function canEditItem(role?: UserRole | string): boolean {
+  return role !== 'viewer' && !String(role || '').includes('مشاهد');
 }
 
-/**
- * Check if the user role can delete records.
- * Only owner and admin can delete. Viewers can never delete.
- */
-export function canDeleteItem(role: UserRole): boolean {
-  return role === 'owner' || role === 'admin';
+export function canDeleteItem(role?: UserRole | string): boolean {
+  if (!role) return true;
+  const r = String(role);
+  return r === 'owner' || r === 'admin' || r.includes('مالك') || r.includes('مدير');
 }
 
-/**
- * Check if the user role can add/edit/delete prices in the pricing catalog.
- * Viewers can USE the calculator interactively, but CANNOT modify catalog services/prices.
- */
-export function canModifyPricingCatalog(role: UserRole): boolean {
-  return role !== 'viewer';
+export function canModifyPricingCatalog(role?: UserRole | string): boolean {
+  return role !== 'viewer' && !String(role || '').includes('مشاهد');
 }
 
-/**
- * Checks if a specific tab is accessible for the role or user.
- * If previewMode is active (i.e. the owner is testing a specific role),
- * we check the allowed tabs for that previewed role without owner bypass.
- */
+export function canManageHR(role?: UserRole | string): boolean {
+  if (!role) return true;
+  const r = String(role);
+  return (
+    r === 'owner' ||
+    r === 'admin' ||
+    r === 'accountant' ||
+    r.includes('مالك') ||
+    r.includes('مدير') ||
+    r.includes('محاسب')
+  );
+}
+
 export function canAccessTab(
   role: UserRole,
   tab: NavigationTab,
@@ -209,10 +183,6 @@ export function canAccessTab(
   return getAllowedTabs(role, isPreviewMode ? null : user, agencySettings).includes(tab);
 }
 
-/**
- * Only Owner can see Excel export, Google Sheets connection, and Formulas cheat-sheet.
- * In preview mode, respect the simulated role so owner can test other roles.
- */
 export function canAccessOwnerControls(
   role: UserRole,
   user?: User | null,
@@ -226,11 +196,6 @@ export function canAccessOwnerControls(
   return false;
 }
 
-/**
- * Owner and Admin can access Settings & Agency Profile Modal.
- * Primary Owner ALWAYS retains access to prevent lockouts under any circumstance,
- * except when deliberately previewing a restricted employee role.
- */
 export function canAccessSettings(
   role: UserRole,
   user?: User | null,
@@ -243,10 +208,6 @@ export function canAccessSettings(
   return role === 'owner' || role === 'admin';
 }
 
-/**
- * Check if the user can modify or delete an approved/paid invoice.
- * If locked, only owner and admin can edit.
- */
 export function canEditApprovedInvoice(
   role: UserRole,
   isApprovedOrPaid: boolean,
@@ -261,9 +222,6 @@ export function canEditApprovedInvoice(
   return role === 'owner' || role === 'admin';
 }
 
-/**
- * Role badge display info (label, color classes).
- */
 export function getRoleBadgeInfo(role: UserRole): { label: string; bg: string; text: string; border: string } {
   switch (role) {
     case 'owner':

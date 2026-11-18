@@ -5,21 +5,25 @@ export const TAB_LABELS: Record<AppLanguage, Record<NavigationTab, string>> = {
     dashboard: 'المؤشرات',
     quotations: 'عروض الأسعار',
     sales: 'المبيعات',
+    returns: 'المرتجعات',
     vouchers: 'السندات',
     pricing: 'الحاسبة',
     purchases: 'المشتريات',
     expenses: 'المصروفات',
     inventory: 'المخزون',
+    hr: 'الموظفون والرواتب',
   },
   en: {
     dashboard: 'Dashboard',
     quotations: 'Quotations',
     sales: 'Sales',
+    returns: 'Returns',
     vouchers: 'Vouchers',
     pricing: 'Calculator',
     purchases: 'Purchases',
     expenses: 'Expenses',
     inventory: 'Inventory',
+    hr: 'HR & Payroll',
   },
 };
 
@@ -29,11 +33,13 @@ export const translations = {
     dashboard: 'المؤشرات والأرباح',
     quotations: 'عروض الأسعار',
     sales: 'المبيعات والفواتير',
+    returns: 'المرتجعات وإشعارات الدائن',
     vouchers: 'السندات (قبض وصرف)',
     pricing: 'حاسبة المقاسات والأسعار',
     purchases: 'المشتريات والموردين',
     expenses: 'المصروفات التشغيلية',
     inventory: 'إدارة المستودع والمخزون',
+    hr: 'الموارد البشرية والرواتب',
 
     // Header buttons & indicators
     installApp: 'تثبيت التطبيق',
@@ -73,8 +79,8 @@ export const translations = {
     price: 'السعر',
 
     // Dashboard
-    totalSales: 'إجمالي المبيعات',
-    totalPurchases: 'إجمالي المشتريات',
+    totalSales: 'صافي المبيعات',
+    totalPurchases: 'صافي المشتريات',
     totalExpenses: 'المصروفات التشغيلية',
     netProfit: 'صافي الأرباح',
     treasuryBalance: 'السيولة وصناديق النقدية',
@@ -195,7 +201,7 @@ export const translations = {
     receivedBy: 'المستلم / أمين الصندوق',
     approvedBy: 'المعتمد / المدير',
     invoiceSettlementTitle: 'تسوية دفعة فاتورة مبيعات',
-    invoiceSettlementHelp: 'عند التفعيل لا يتكرر المبلغ في الصندوق وتُحدث الفاتورة تلقائياً',
+    invoiceSettlementHelp: 'عند التفعيل لا يتكرر المبلغ في الصندوق وتُحدث الفاتورة تلقائياً (وعند حذف السند يعود الرصيد تلقائياً)',
     autoUpdateInvoiceLabel: 'تحديث المدفوع في الفاتورة تلقائياً',
     selectInvoice: 'اختر الفاتورة المرتبطة',
     linkInvoiceOptional: 'ربط بفاتورة مبيعات',
@@ -210,11 +216,13 @@ export const translations = {
     dashboard: 'Dashboard & Metrics',
     quotations: 'Quotations',
     sales: 'Sales & Invoices',
+    returns: 'Returns & Credit Notes',
     vouchers: 'Vouchers (Receipt & Payment)',
     pricing: 'Pricing & Sizing Calculator',
     purchases: 'Purchases & Suppliers',
     expenses: 'Operating Expenses',
     inventory: 'Inventory & Materials',
+    hr: 'HR & Payroll',
 
     // Header buttons & indicators
     installApp: 'Install App',
@@ -254,8 +262,8 @@ export const translations = {
     price: 'Price',
 
     // Dashboard
-    totalSales: 'Total Sales',
-    totalPurchases: 'Total Purchases',
+    totalSales: 'Net Sales',
+    totalPurchases: 'Net Purchases',
     totalExpenses: 'Operating Expenses',
     netProfit: 'Net Profit',
     treasuryBalance: 'Treasury & Cash Funds',
@@ -393,4 +401,3 @@ export type TranslationKey = keyof typeof translations.ar;
 export function getTranslations(lang: string = 'ar') {
   return lang === 'en' ? translations.en : translations.ar;
 }
-

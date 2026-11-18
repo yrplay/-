@@ -311,14 +311,16 @@ export const SalesView: React.FC<SalesViewProps> = ({
       return;
     }
 
+    const existingNos = sales.map((s) => s.invoiceNo);
     if (editingSale) {
       const updated = computeSaleDerivedFields(
         { ...formData, id: editingSale.id, invoiceNo: editingSale.invoiceNo },
-        sales.findIndex((s) => s.id === editingSale.id)
+        sales.findIndex((s) => s.id === editingSale.id),
+        existingNos
       );
       onUpdateSale(updated);
     } else {
-      const newSale = computeSaleDerivedFields(formData, sales.length);
+      const newSale = computeSaleDerivedFields(formData, sales.length, existingNos);
       onAddSale(newSale);
     }
     setIsModalOpen(false);

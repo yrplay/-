@@ -48,6 +48,9 @@ interface AgencyProfileModalProps {
   onLogin: () => void;
   onLogout: () => void;
   spreadsheetUrl: string | null;
+  onClearAllRecords?: () => void;
+  onExportJsonBackup?: () => void;
+  onImportJsonBackup?: (file: File) => void;
 }
 
 type TabType = 'agency' | 'profile' | 'collaborators';
@@ -62,6 +65,9 @@ export const AgencyProfileModal: React.FC<AgencyProfileModalProps> = ({
   onLogin,
   onLogout,
   spreadsheetUrl,
+  onClearAllRecords,
+  onExportJsonBackup,
+  onImportJsonBackup,
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>('agency');
   const [copiedLink, setCopiedLink] = useState(false);
@@ -1522,6 +1528,55 @@ export const AgencyProfileModal: React.FC<AgencyProfileModalProps> = ({
               </div>
             </div>
           )}
+
+          {/* Data Backup & Reset Controls */}
+          <div className="mt-6 pt-4 border-t border-slate-200 bg-slate-50 p-4 rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div>
+              <div className="font-extrabold text-slate-900">إدارة قاعدة البيانات والنسخ الاحتياطي وتصفير البيانات التجريبية</div>
+              <div className="text-slate-500 text-[11px] mt-0.5">
+                يمكنك حفظ نسخة احتياطية كاملة (JSON) أو استعادتها أو مسح البيانات التجريبية للبدء بسجل نظيف.
+              </div>
+            </div>
+            <div className="flex items-center flex-wrap gap-2">
+              {onExportJsonBackup && (
+                <button
+                  type="button"
+                  onClick={onExportJsonBackup}
+                  className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-900 text-white font-bold cursor-pointer"
+                >
+                  ⬇️ تصدير نسخة احتياطية (JSON)
+                </button>
+              )}
+              {onImportJsonBackup && (
+                <label className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white font-bold cursor-pointer">
+                  <span>⬆️ استعادة نسخة (JSON)</span>
+                  <input
+                    type="file"
+                    accept=".json,application/json"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) onImportJsonBackup(f);
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+              )}
+              {onClearAllRecords && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (confirm("هل أنت متأكد من مسح كافة السجلات والبيانات التجريبية والبدء بقاعدة بيانات فارغة؟ (تبقى إعدادات وشعار المنشأة محفوظة)")) {
+                      onClearAllRecords();
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold cursor-pointer"
+                >
+                  🗑️ تصفير ومسح البيانات التجريبية
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
     </div>

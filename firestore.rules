@@ -1,51 +1,120 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Default deny all unmatched paths
+    // منع افتراضي لكافة المسارات غير المعرفة
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // Connection test document
+    // التحقق من أن المستخدم مسجل دخوله بحساب موثق غير مجهول ولديه بريد إلكتروني مفعل
+    function isAuthenticatedUser() {
+      return request.auth != null
+        && request.auth.token.firebase.sign_in_provider != 'anonymous'
+        && request.auth.token.email != null;
+    }
+
+    // جلب وثيقة إعدادات الوكالة للتحقق من المالك وفريق العمل المصرح لهم
+    function getAgencyProfile() {
+      return get(/databases/$(database)/documents/agency_settings/main_profile).data;
+    }
+
+    // التحقق مما إذا كان المستخدم هو المالك الأساسي أو ضمن قائمة المتعاونين المصرح لهم
+    function isAuthorizedTeamMember() {
+      return isAuthenticatedUser() && (
+        !exists(/databases/$(database)/documents/agency_settings/main_profile) ||
+        !('ownerEmail' in getAgencyProfile()) ||
+        getAgencyProfile().ownerEmail == null ||
+        getAgencyProfile().ownerEmail == '' ||
+        getAgencyProfile().ownerEmail == request.auth.token.email ||
+        ('userProfile' in getAgencyProfile() && getAgencyProfile().userProfile != null && 'email' in getAgencyProfile().userProfile && getAgencyProfile().userProfile.email == request.auth.token.email) ||
+        ('authorizedEmails' in getAgencyProfile() && getAgencyProfile().authorizedEmails != null && request.auth.token.email in getAgencyProfile().authorizedEmails)
+      );
+    }
+
+    // التحقق من صلاحية المالك أو المدير لإدارة الإعدادات والحذف
+    function isOwnerOrAdmin() {
+      return isAuthenticatedUser() && (
+        !exists(/databases/$(database)/documents/agency_settings/main_profile) ||
+        !('ownerEmail' in getAgencyProfile()) ||
+        getAgencyProfile().ownerEmail == null ||
+        getAgencyProfile().ownerEmail == '' ||
+        getAgencyProfile().ownerEmail == request.auth.token.email ||
+        ('userProfile' in getAgencyProfile() && getAgencyProfile().userProfile != null && 'email' in getAgencyProfile().userProfile && getAgencyProfile().userProfile.email == request.auth.token.email) ||
+        ('adminEmails' in getAgencyProfile() && getAgencyProfile().adminEmails != null && request.auth.token.email in getAgencyProfile().adminEmails)
+      );
+    }
+
+    // وثيقة فحص الاتصال فقط للمستخدمين المسجلين
     match /test/{docId} {
-      allow read, write: if true;
+      allow read, write: if isAuthenticatedUser();
     }
 
-    // Check if the user is authenticated
-    function isAuthorizedUser() {
-      return request.auth != null;
-    }
-
-    // Agency collaborative collections - strictly restricted to authenticated team accounts
+    // المجموعات المحاسبية والتشغيلية مقيدة حصرياً بأعضاء فريق الوكالة المصرح لهم
     match /sales/{saleId} {
-      allow read, write: if isAuthorizedUser();
+      allow read, create, update: if isAuthorizedTeamMember();
+      allow delete: if isOwnerOrAdmin();
     }
 
     match /purchases/{purchaseId} {
-      allow read, write: if isAuthorizedUser();
+      allow read, create, update: if isAuthorizedTeamMember();
+      allow delete: if isOwnerOrAdmin();
     }
 
     match /expenses/{expenseId} {
-      allow read, write: if isAuthorizedUser();
+      allow read, create, update: if isAuthorizedTeamMember();
+      allow delete: if isOwnerOrAdmin();
     }
 
     match /inventory/{inventoryId} {
-      allow read, write: if isAuthorizedUser();
+      allow read, create, update: if isAuthorizedTeamMember();
+      allow delete: if isOwnerOrAdmin();
+    }
+
+    match /inventory_movements/{movementId} {
+      allow read, create: if isAuthorizedTeamMember();
+      allow update, delete: if isOwnerOrAdmin();
     }
 
     match /quotations/{quotationId} {
-      allow read, write: if isAuthorizedUser();
+      allow read, create, update: if isAuthorizedTeamMember();
+      allow delete: if isOwnerOrAdmin();
     }
 
     match /vouchers/{voucherId} {
-      allow read, write: if isAuthorizedUser();
+      allow read, create, update: if isAuthorizedTeamMember();
+      allow delete: if isOwnerOrAdmin();
     }
 
-    // Agency public branding settings (Agency Name, Logo, Subtitle, Phone, Address)
-    // Public read allows the login gate and public documents to immediately reflect the agency's custom branding
+    match /returns/{returnId} {
+      allow read, create, update: if isAuthorizedTeamMember();
+      allow delete: if isOwnerOrAdmin();
+    }
+
+    match /employees/{employeeId} {
+      allow read: if isAuthorizedTeamMember();
+      allow write: if isOwnerOrAdmin();
+    }
+
+    match /attendance/{attendanceId} {
+      allow read, create, update: if isAuthorizedTeamMember();
+      allow delete: if isOwnerOrAdmin();
+    }
+
+    match /payrolls/{payrollId} {
+      allow read: if isAuthorizedTeamMember();
+      allow write: if isOwnerOrAdmin();
+    }
+
+    // إعدادات الوكالة محمية ولا تُقرأ للعامة؛ فقط أعضاء الفريق المصرح لهم يقرأونها والمالك/المدير يعدلها
     match /agency_settings/{settingsId} {
+      allow read: if isAuthorizedTeamMember();
+      allow write: if isOwnerOrAdmin();
+    }
+
+    // هوية العرض العامة المختصرة (الاسم والشعار فقط لبوابة الدخول دون أي أرقام ضريبية أو قوائم موظفين)
+    match /public_branding/{docId} {
       allow read: if true;
-      allow write: if isAuthorizedUser();
+      allow write: if isOwnerOrAdmin();
     }
   }
 }

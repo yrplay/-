@@ -2,10 +2,12 @@ export type NavigationTab =
   | 'dashboard'
   | 'quotations'
   | 'sales'
+  | 'returns'
   | 'vouchers'
   | 'purchases'
   | 'expenses'
   | 'inventory'
+  | 'hr'
   | 'pricing';
 
 export type QuotationStatus = 'بانتظار الاعتماد' | 'معتمد ومحول لطلب' | 'مرفوض' | 'منتهي الصلاحية';
@@ -22,33 +24,33 @@ export interface QuotationLineItem {
 
 export interface QuotationItem {
   id: string;
-  quotationNo: string; // e.g. "QT-1001"
+  quotationNo: string; // e.g. "QT-2026-0001"
   customerName: string;
   customerPhone?: string;
   customerCompany?: string;
   customerEmail?: string;
   customerVatNumber?: string;
   issueDate: string; // YYYY-MM-DD
-  validityDays?: number | ''; // e.g. 15 or 30 days (اختياري وقابل للحذف)
+  validityDays?: number | ''; // e.g. 15 or 30 days
   expiryDate?: string; // YYYY-MM-DD
   status: QuotationStatus;
   items: QuotationLineItem[];
   subtotal: number;
   discount: number;
-  discountType?: 'amount' | 'percentage'; // نوع الخصم: مبلغ محدد أو نسبة مئوية
-  discountPercent?: number; // النسبة المئوية إذا تم اختيار نسبة
-  isTaxIncluded: boolean; // هل تشمل الضريبة
+  discountType?: 'amount' | 'percentage';
+  discountPercent?: number;
+  isTaxIncluded: boolean;
   taxRate?: number;
   taxAmount?: number;
   netTotal: number;
-  paymentTerms?: string; // شروط الدفع، مثلاً 50% مقدم و50% عند الاستلام
-  executionDays?: string; // مدة التنفيذ بعد الاعتماد
+  paymentTerms?: string;
+  executionDays?: string;
   notes?: string;
-  includeCustomerApproval?: boolean; // بند الاعتماد والتعميد اختياري يحدده المستخدم
-  convertedSaleId?: string; // معرف الفاتورة إذا تم اعتماده
+  includeCustomerApproval?: boolean;
+  convertedSaleId?: string;
   convertedDate?: string;
-  revenueSource?: string; // جهة الدخل / قناة المبيعات (المحل، المتجر، المندوب، وسائل التواصل...)
-  audit?: AuditMeta; // سجل المنشئ والتعديل
+  revenueSource?: string;
+  audit?: AuditMeta;
 }
 
 export interface AuditMeta {
@@ -62,9 +64,33 @@ export interface AuditMeta {
 
 export interface AuditLogEntry {
   id: string;
-  action: 'إنشاء' | 'تعديل' | 'حذف' | 'اعتماد وتعميد' | 'CREATE' | 'UPDATE' | 'DELETE' | 'CONVERT_TO_SALE';
-  entity?: 'فاتورة مبيعات' | 'عرض سعر' | 'مشتريات' | 'مصروفات' | 'مخزون' | 'إعدادات' | string;
-  entityType?: 'QUOTATION' | 'INVOICE' | 'PURCHASE' | 'EXPENSE' | 'INVENTORY' | 'SETTINGS' | string;
+  action:
+    | 'إنشاء'
+    | 'تعديل'
+    | 'حذف'
+    | 'اعتماد وتعميد'
+    | 'إشعار دائن / مرتجع'
+    | 'اعتماد مسير رواتب'
+    | 'حركة مخزون'
+    | 'CREATE'
+    | 'UPDATE'
+    | 'DELETE'
+    | 'CONVERT_TO_SALE'
+    | 'RETURN'
+    | 'PAYROLL'
+    | 'STOCK_MOVEMENT';
+  entity?: string;
+  entityType?:
+    | 'QUOTATION'
+    | 'INVOICE'
+    | 'PURCHASE'
+    | 'EXPENSE'
+    | 'INVENTORY'
+    | 'VOUCHER'
+    | 'RETURN'
+    | 'HR'
+    | 'SETTINGS'
+    | string;
   entityId?: string;
   entityNumber?: string;
   customerOrSupplier?: string;
@@ -73,9 +99,21 @@ export interface AuditLogEntry {
   userRole?: string;
   timestamp: string;
   details?: string;
+  prevHash?: string;
+  hash?: string;
 }
 
 export type UserRole = 'owner' | 'admin' | 'accountant' | 'sales' | 'warehouse' | 'editor' | 'viewer';
+
+export type PaymentStatusCode = 'paid' | 'partial' | 'unpaid';
+
+export interface MaterialConsumptionItem {
+  inventoryId: string;
+  itemName: string;
+  unit: string;
+  quantity: number;
+  unitCost?: number;
+}
 
 export interface SaleItem {
   id: string;
@@ -91,30 +129,33 @@ export interface SaleItem {
   itemTotal: number; // J: G * I
   invoiceTotal: number; // K: gross total
   discount: number; // L
-  discountType?: 'amount' | 'percentage'; // نوع الخصم: مبلغ محدد أو نسبة مئوية
-  discountPercent?: number; // النسبة المئوية إذا تم اختيار نسبة
-  netTotal: number; // M: K - L (or K - L + tax if tax applied)
+  discountType?: 'amount' | 'percentage';
+  discountPercent?: number;
+  netTotal: number; // M: K - L (+ tax if tax applied)
   paymentMethod: string; // N
-  paidAmount: number; // O
-  remainingAmount: number; // P: M - O
+  paidAmount: number; // O (initial/direct payment + settled vouchers)
+  initialPaidAmount?: number; // المبلغ المدفوع مباشرة عند إصدار الفاتورة قبل سندات التسوية
+  remainingAmount: number; // P: M - O - returnedAmount
+  returnedAmount?: number; // إجمالي قيمة المرتجعات / إشعارات الدائن المرتبطة بهذه الفاتورة
   paymentStatus: string; // Q: "✅ مسدد" | "🟡 مسدد جزئي" | "🔴 غير مسدد"
+  paymentStatusCode?: PaymentStatusCode;
   receiptDate: string; // R: YYYY-MM-DD
   deliveryDate: string; // S: YYYY-MM-DD
   orderStatus: string; // T
   assignedTo: string; // U
   delayDays: number | ''; // V
   notes: string; // W
-  // Optional Multi-items support
   items?: SaleLineItem[];
-  // Optional Tax fields (فقط عند طلب العميل فاتورة ضريبية)
   isTaxInvoice?: boolean;
-  taxRate?: number; // e.g. 15% (default 15)
-  taxAmount?: number; // Net before tax * 15% or invoice total * 15%
+  taxRate?: number;
+  taxAmount?: number;
   subtotalBeforeTax?: number;
-  customerVatNumber?: string; // الرقم الضريبي للعميل
-  agencyVatNumber?: string; // الرقم الضريبي للوكالة/المحل
-  revenueSource?: string; // جهة الدخل / قناة البيع
-  audit?: AuditMeta; // تتبع الإنشاء والتعديل
+  customerVatNumber?: string;
+  agencyVatNumber?: string;
+  revenueSource?: string;
+  deductFromInventory?: boolean;
+  consumedMaterials?: MaterialConsumptionItem[];
+  audit?: AuditMeta;
 }
 
 export interface SaleLineItem {
@@ -125,6 +166,7 @@ export interface SaleLineItem {
   unitType: string;
   unitPrice: number;
   itemTotal: number;
+  inventoryItemId?: string;
 }
 
 export type AppLanguage = 'ar' | 'en';
@@ -134,42 +176,205 @@ export interface UserProfile {
   email: string;
   role: string;
   phone?: string;
-  avatarUrl?: string | null; // شعار أو صورة الموظف الخاصة
-  language?: AppLanguage; // لغة واجهة الموظف المفضلة (عربي أو إنجليزي)
+  avatarUrl?: string | null;
+  language?: AppLanguage;
+  displayName?: string;
 }
 
-export type VoucherType = 'receipt' | 'payment'; // سند قبض (استلام) أو سند صرف (دفع)
+export type VoucherType = 'receipt' | 'payment';
 
 export interface VoucherItem {
   id: string;
-  voucherNo: string; // e.g. "RC-1001" or "PV-1001"
+  voucherNo: string; // e.g. "RC-2026-0001" or "PV-2026-0001"
   type: VoucherType;
   date: string; // YYYY-MM-DD
   amount: number;
-  amountInWords?: string; // تفقيط المبلغ بالكلمات
-  partyName: string; // اسم العميل أو المورد أو المستلم
+  amountInWords?: string;
+  partyName: string;
   partyPhone?: string;
-  paymentMethod: string; // كاش نقدي / تحويل بنكي / شبكة مدى / شيك
-  referenceNo?: string; // رقم الشيك / رقم الحوالة / رقم المرجع
-  relatedInvoiceNo?: string; // رقم الفاتورة المرتبطة إن وجدت
-  isInvoiceSettlement?: boolean; // تسوية دفعة لفاتورة مبيعات - لمنع تكرار الاحتساب في الخزينة والصندوق
-  autoUpdatedInvoice?: boolean; // هل تم تحديث الفاتورة تلقائياً عند حفظ السند
-  description: string; // البيان: وذلك عن...
-  receivedBy?: string; // المستلم / أمين الصندوق
-  approvedBy?: string; // المعتمد / المدير
+  paymentMethod: string;
+  referenceNo?: string;
+  relatedInvoiceNo?: string; // رقم الفاتورة المرتبطة (مبيعات أو مشتريات)
+  relatedDocId?: string; // معرف الفاتورة المرتبطة (sale.id أو purchase.id)
+  relatedDocType?: 'sale' | 'purchase' | 'return' | 'payroll';
+  isInvoiceSettlement?: boolean;
+  autoUpdatedInvoice?: boolean;
+  description: string;
+  receivedBy?: string;
+  approvedBy?: string;
+  notes?: string;
+  audit?: AuditMeta;
+}
+
+// ==========================================
+// نظام المرتجعات وإشعارات الدائن (Returns & Credit Notes)
+// ==========================================
+export type ReturnKind = 'sale_return' | 'purchase_return';
+export type ReturnActionType = 'full' | 'partial' | 'exchange' | 'defect';
+
+export interface ReturnLineItem {
+  id: string;
+  originalLineId?: string;
+  itemName: string;
+  specifications?: string;
+  unitType: string;
+  soldOrPurchasedQty: number;
+  returnQty: number;
+  unitPrice: number;
+  lineTotal: number;
+  restockInventoryId?: string;
+  restockQty?: number;
+}
+
+export interface ReturnRecord {
+  id: string;
+  returnNo: string; // مثل CN-2026-0001 لإشعار الدائن أو PR-2026-0001 لمرتجع الشراء
+  kind: ReturnKind; // sale_return (إشعار دائن مبيعات) أو purchase_return (مرتجع مشتريات)
+  returnType: ReturnActionType; // كامل | جزئي | استبدال | تالف طباعة
+  date: string; // YYYY-MM-DD
+  originalDocId: string; // معرف الفاتورة الأصلية
+  originalDocNo: string; // رقم الفاتورة الأصلية
+  partyName: string; // اسم العميل أو المورد
+  partyPhone?: string;
+  partyVatNumber?: string;
+  items: ReturnLineItem[];
+  subtotalBeforeTax: number;
+  isTaxIncluded: boolean;
+  taxRate: number;
+  taxAmount: number;
+  totalRefundAmount: number; // الإجمالي شاملاً الضريبة
+  refundMethod: 'cash_voucher' | 'account_deduction' | 'exchange_replacement';
+  paymentMethod: string; // كاش / تحويل / شبكة
+  generatedVoucherId?: string; // معرف سند الصرف/القبض الآلي إن وجد
+  generatedVoucherNo?: string;
+  restockToInventory: boolean; // هل يتم إرجاع/خصم الكمية من المخزون
+  reason: string; // سبب الإرجاع (عيب طباعة، اختلاف مقاس، إلغاء جزء من الطلب...)
+  notes?: string;
+  audit?: AuditMeta;
+}
+
+// ==========================================
+// حركات المخزون والهالك والتالف (Inventory Movements & Wastage)
+// ==========================================
+export type StockMovementType =
+  | 'purchase_in' // توريد من فاتورة شراء
+  | 'sale_out' // صرف لفاتورة مبيعات / إنتاج
+  | 'sale_return_in' // إرجاع من مرتجع مبيعات
+  | 'purchase_return_out' // خصم لمرتجع مشتريات للمورد
+  | 'wastage_out' // هالك وتالف طباعة وقص
+  | 'adjustment'; // تسوية جردية
+
+export interface InventoryMovement {
+  id: string;
+  movementNo: string;
+  date: string;
+  inventoryId: string;
+  itemName: string;
+  unit: string;
+  type: StockMovementType;
+  quantityChange: number; // موجب للإضافة، سالب للخصم
+  previousQty: number;
+  newQty: number;
+  unitCost?: number;
+  totalCost?: number;
+  referenceDocNo?: string;
+  referenceDocId?: string;
+  reason?: string;
+  performedBy?: string;
+}
+
+// ==========================================
+// الموارد البشرية والحضور ومسيرات الرواتب (HR, Attendance & Payroll)
+// ==========================================
+export type EmployeeStatus = 'نشط' | 'إجازة' | 'موقوف';
+export type ContractSalaryType = 'monthly' | 'daily';
+
+export interface EmployeeItem {
+  id: string;
+  employeeCode: string; // EMP-001
+  name: string;
+  jobTitle: string; // مصمم جرافيك، فني طباعة، فني تركيب، محاسب، مندوب مبيعات...
+  department: string; // التصميم، الإنتاج والطباعة، التركيب، الإدارة، المبيعات
+  phone: string;
+  nationalIdOrIqama?: string;
+  joinDate: string;
+  salaryType: ContractSalaryType;
+  baseSalary: number; // الراتب الأساسي الشهري أو الأجر اليومي
+  housingAllowance: number; // بدل سكن
+  transportAllowance: number; // بدل نقل
+  otherAllowance: number; // بدلات أخرى
+  workingDaysPerMonth: number; // افتراضياً 26 أو 30 يوماً
+  dailyWorkHours: number; // افتراضياً 8 ساعات
+  bankName?: string;
+  iban?: string;
+  status: EmployeeStatus;
+  notes?: string;
+}
+
+export type AttendanceStatus = 'present' | 'absent' | 'late' | 'leave' | 'excused';
+
+export interface AttendanceRecord {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  date: string; // YYYY-MM-DD
+  status: AttendanceStatus;
+  checkIn?: string; // HH:mm
+  checkOut?: string; // HH:mm
+  workedHours: number;
+  overtimeHours: number;
+  lateMinutes: number;
+  notes?: string;
+}
+
+export interface PayrollEmployeeLine {
+  employeeId: string;
+  employeeCode: string;
+  employeeName: string;
+  jobTitle: string;
+  baseSalary: number;
+  totalAllowances: number;
+  presentDays: number;
+  absentDays: number;
+  lateMinutes: number;
+  overtimeHours: number;
+  absenceDeduction: number; // خصم الغياب والتأخير الآلي
+  otherDeductions: number; // سلف أو جزاءات أخرى
+  overtimePay: number; // مقابل الساعات الإضافية
+  bonuses: number; // مكافآت وعمولات
+  netSalary: number; // صافي الراتب المستحق
+  notes?: string;
+}
+
+export interface PayrollRun {
+  id: string;
+  payrollNo: string; // PAY-2026-09
+  month: string; // YYYY-MM
+  issueDate: string;
+  status: 'draft' | 'approved_paid';
+  paymentMethod: string;
+  lines: PayrollEmployeeLine[];
+  totalBaseAndAllowances: number;
+  totalDeductions: number;
+  totalOvertimeAndBonuses: number;
+  totalNetPayroll: number;
+  generatedExpenseId?: string;
+  generatedVoucherIds?: string[];
+  approvedBy?: string;
+  approvedAt?: string;
   notes?: string;
   audit?: AuditMeta;
 }
 
 export interface PriceListItem {
   id: string;
-  materialName: string; // اسم الخامة أو الخدمة (بنر، فليكس، ستيكر، كانفاس...)
-  category: string; // خامات عريضة / مطبوعات رقمية / ليزر وأكريليك / خدمات
-  unit: string; // متر مربع / متر طولي / قطعة / كرتون
-  sellingPrice: number; // سعر البيع للعميل
-  costPrice: number; // التكلفة التقريبية
-  minOrder?: number; // الحد الأدنى للطلب
-  notes?: string; // ملاحظات أو دقة
+  materialName: string;
+  category: string;
+  unit: string;
+  sellingPrice: number;
+  costPrice: number;
+  minOrder?: number;
+  notes?: string;
 }
 
 export interface Collaborator {
@@ -185,31 +390,45 @@ export interface Collaborator {
     | 'محرر (Editor)'
     | 'مشاهد (Viewer)'
     | 'مخصص (Custom)';
-  customPermissions?: ('dashboard' | 'quotations' | 'sales' | 'purchases' | 'expenses' | 'inventory' | 'vouchers' | 'pricing')[];
+  customPermissions?: NavigationTab[];
   addedAt: string;
   status: 'نشط' | 'دعوة معلقة';
+}
+
+export interface PartyRecord {
+  id: string;
+  name: string;
+  type: 'customer' | 'supplier' | 'both';
+  phone: string;
+  company?: string;
+  vatNumber?: string;
+  email?: string;
+  address?: string;
+  notes?: string;
 }
 
 export interface AgencySettings {
   agencyName: string;
   agencySubtitle: string;
-  appShortName?: string; // الاسم المختصر عند التثبيت في الجوال أو سطح المكتب
-  agencyCountry?: string; // الدولة / المنطقة (المملكة العربية السعودية، قابلة للتعديل أو الإخفاء)
+  appShortName?: string;
+  agencyCountry?: string;
   agencyVatNumber: string;
-  showVatNumber?: boolean; // خيار إظهار أو إخفاء الرقم الضريبي في المطبوعات والفواتير العادية
+  showVatNumber?: boolean;
+  defaultTaxRate?: number; // نسبة الضريبة الافتراضية القابلة للتعديل (مثلاً 15%)
   agencyPhone: string;
   agencyAddress: string;
-  agencyLogoUrl: string | null; // data URL or image link
-  agencyStampUrl?: string | null; // صورة ختم المحل / المؤسسة
-  invoiceFooterText?: string; // تذييل أسفل الفاتورة (شروط أو شكر)
-  showQrCode?: boolean; // إظهار كود QR في الفواتير وعروض الأسعار
-  customQrUrl?: string | null; // صورة أو رابط QR مخصص
-  invoiceLockApproved?: boolean; // قفل الفواتير بعد السداد والاعتماد
+  agencyLogoUrl: string | null;
+  agencyStampUrl?: string | null;
+  invoiceFooterText?: string;
+  showQrCode?: boolean;
+  customQrUrl?: string | null;
+  invoiceLockApproved?: boolean;
   userProfile?: UserProfile;
   collaborators?: Collaborator[];
-  ownerEmail?: string; // البريد الإلكتروني للمالك الأساسي للنظام
-  priceList?: PriceListItem[]; // قائمة أسعار الوكالة
-  appLanguage?: AppLanguage; // لغة النظام الافتراضية
+  ownerEmail?: string;
+  priceList?: PriceListItem[];
+  parties?: PartyRecord[];
+  appLanguage?: AppLanguage;
 }
 
 export const REVENUE_SOURCES = [
@@ -230,6 +449,7 @@ export interface PurchaseLineItem {
   purchasePrice: number;
   total: number;
   notes?: string;
+  inventoryItemId?: string;
 }
 
 export interface PurchaseItem {
@@ -242,19 +462,22 @@ export interface PurchaseItem {
   purchasePrice: number; // F
   total: number; // G: E * F (or total with tax)
   supplier: string; // H
-  supplierType?: string; // مورد خامات أو مورد خدمات وتنفيذ
+  supplierType?: string;
   paymentMethod: string; // I
   paidAmount: number; // J
-  remainingAmount: number; // K: G - J
+  initialPaidAmount?: number;
+  remainingAmount: number; // K: G - J - returnedAmount
+  returnedAmount?: number;
   paymentStatus: string; // L: "✅ مسدد" | "🟡 مسدد جزئي" | "🔴 غير مسدد"
-  notes?: string; // خانة ملاحظات مع كل مشترى
-  items?: PurchaseLineItem[]; // دعم إضافة أكثر من منتج/خدمة عند الشراء من مورد واحد
-  // Tax fields (مع ضريبة 15% أو بدون ضريبة 0%)
+  paymentStatusCode?: PaymentStatusCode;
+  notes?: string;
+  items?: PurchaseLineItem[];
   isTaxInvoice?: boolean;
-  taxRate?: number; // e.g. 15%
-  taxAmount?: number; // قيمة الضريبة
-  subtotalBeforeTax?: number; // الإجمالي قبل الضريبة
-  supplierVatNumber?: string; // الرقم الضريبي للمورد
+  taxRate?: number;
+  taxAmount?: number;
+  subtotalBeforeTax?: number;
+  supplierVatNumber?: string;
+  addToInventory?: boolean;
   audit?: AuditMeta;
 }
 
@@ -266,6 +489,7 @@ export interface ExpenseItem {
   amount: number; // D
   paymentMethod: string; // E
   notes: string; // F
+  relatedPayrollId?: string;
 }
 
 export interface InventoryItem {
@@ -276,26 +500,36 @@ export interface InventoryItem {
   unit: string; // D
   currentQty: number; // E
   minQty: number; // F
+  unitCost?: number; // متوسط تكلفة الوحدة لاحتساب الهالك وتكلفة الخامات المستهلكة
   status: string; // G: "🛒 طلب شراء" | "🟡 منخفض" | "🟢 كافي"
+  statusCode?: 'reorder' | 'low' | 'ok';
   notes: string; // H
 }
 
 export interface DashboardMetrics {
-  totalSales: number; // إجمالي المبيعات
+  totalSales: number; // إجمالي المبيعات قبل المرتجعات
+  totalSaleReturns: number; // إجمالي مرتجعات المبيعات (إشعارات الدائن)
+  netSalesAfterReturns: number; // صافي المبيعات الفعلي
   totalPurchases: number; // إجمالي المشتريات
-  totalExpenses: number; // إجمالي المصروفات
-  netProfit: number; // صافي الربح
-  customerReceivables: number; // المستحقات من العملاء
-  supplierPayables: number; // المستحقات للموردين
+  totalPurchaseReturns: number; // إجمالي مرتجعات المشتريات
+  netPurchasesAfterReturns: number; // صافي المشتريات الفعلي
+  totalExpenses: number; // إجمالي المصروفات التشغيلية (بما فيها الرواتب المعتمدة)
+  wastageCost: number; // تكلفة الهالك والتالف من الخامات
+  netProfit: number; // صافي الربح الدقيق
+  customerReceivables: number; // المستحقات الفعلية من العملاء
+  supplierPayables: number; // المستحقات الفعلية للموردين
   expectedCashFlow: number; // التدفق النقدي المتوقع
-  unpaidInvoicesCount: number; // فواتير غير مسددة
+  unpaidInvoicesCount: number;
   partiallyPaidCount: number;
   paidCount: number;
   ordersInProgressCount: number;
   lowStockItemsCount: number;
+  outputVatTotal?: number; // ضريبة المخرجات بعد خصم إشعارات الدائن
+  inputVatTotal?: number; // ضريبة المدخلات بعد خصم مرتجعات المشتريات
+  netVatPayable?: number; // صافي الضريبة المستحقة للهيئة
 }
 
-// Dropdown constants required by prompt
+// Dropdown constants
 export const CUSTOMER_SOURCES = [
   'عميل مباشر',
   'توصية',
@@ -354,7 +588,6 @@ export const SUPPLIER_TYPES = [
 ] as const;
 
 export const PURCHASE_ITEMS = [
-  // خامات
   'ورق A4',
   'ورق كوشيه',
   'فينيل لاصق',
@@ -366,7 +599,6 @@ export const PURCHASE_ITEMS = [
   'ألواح فوم وبلاستيك',
   'كلادينج وألمنيوم',
   'مواد لاصقة وتثبيت',
-  // خدمات وتنفيذ خارجي
   'قص وتشكيل ليزر',
   'تفريز وحفر سي إن سي (CNC)',
   'تشكيل وتطعيج نيون LED',
@@ -412,6 +644,7 @@ export const EXPENSE_CATEGORIES = [
   'تشغيلية',
   'إدارية',
   'تسويقية',
+  'رواتب وأجور',
   'طارئة',
 ] as const;
 

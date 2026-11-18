@@ -20,6 +20,11 @@ import {
   QuotationItem,
   AgencySettings,
   VoucherItem,
+  ReturnRecord,
+  InventoryMovement,
+  EmployeeItem,
+  AttendanceRecord,
+  PayrollRun,
 } from '../types';
 
 export enum OperationType {
@@ -57,10 +62,11 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
       emailVerified: auth.currentUser?.emailVerified,
       isAnonymous: auth.currentUser?.isAnonymous,
       tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData?.map((provider) => ({
-        providerId: provider.providerId,
-        email: provider.email,
-      })) || [],
+      providerInfo:
+        auth.currentUser?.providerData?.map((provider) => ({
+          providerId: provider.providerId,
+          email: provider.email,
+        })) || [],
     },
     operationType,
     path,
@@ -78,6 +84,11 @@ export interface CloudDataCallbacks {
   onInventoryUpdate?: (inventory: InventoryItem[]) => void;
   onQuotationsUpdate?: (quotations: QuotationItem[]) => void;
   onVouchersUpdate?: (vouchers: VoucherItem[]) => void;
+  onReturnsUpdate?: (returns: ReturnRecord[]) => void;
+  onMovementsUpdate?: (movements: InventoryMovement[]) => void;
+  onEmployeesUpdate?: (employees: EmployeeItem[]) => void;
+  onAttendanceUpdate?: (attendance: AttendanceRecord[]) => void;
+  onPayrollsUpdate?: (payrolls: PayrollRun[]) => void;
   onAgencySettingsUpdate?: (settings: AgencySettings) => void;
   onStatusChange?: (status: SyncStatus, error?: string) => void;
 }
@@ -85,21 +96,15 @@ export interface CloudDataCallbacks {
 export const QUOTA_EXHAUSTED_KEY = 'firestore_write_quota_exhausted_date';
 export const CLOUD_SEEDED_FLAG = 'agency_cloud_initial_seeded_flag';
 
-// Clean document ID to ensure Firestore compatibility
 export function sanitizeId(id: string): string {
   return String(id).replace(/[\/\s#?]/g, '-').trim() || `doc-${Date.now()}`;
 }
 
-/**
- * Recursively removes all keys whose values are undefined,
- * because Firestore setDoc/updateDoc/batch.set throws errors on undefined fields.
- */
 export function stripUndefined<T>(obj: T): T {
   if (obj === null || obj === undefined || typeof obj !== 'object') {
     return obj;
   }
   try {
-    // JSON.stringify drops keys with undefined values automatically
     return JSON.parse(JSON.stringify(obj, (_key, val) => (val === undefined ? null : val)));
   } catch {
     const clean: any = Array.isArray(obj) ? [] : {};
@@ -112,10 +117,8 @@ export function stripUndefined<T>(obj: T): T {
   }
 }
 
-// Ensure network is always active on load
 try {
   enableNetwork(db).catch(() => {});
-  // Clear any legacy quota block flags that might have frozen sync in past sessions
   localStorage.removeItem(QUOTA_EXHAUSTED_KEY);
   localStorage.removeItem('force_firestore_write_enabled');
 } catch {
@@ -126,9 +129,7 @@ export function isQuotaExhaustedToday(): boolean {
   return false;
 }
 
-export function markQuotaExhausted(): void {
-  // No-op to avoid breaking cross-device sync
-}
+export function markQuotaExhausted(): void {}
 
 export function clearQuotaExhausted(): void {
   try {
@@ -151,9 +152,17 @@ export async function resetCloudNetwork(): Promise<boolean> {
 }
 
 /**
- * Subscribes to real-time updates across all agency collections in Firestore.
- * Automatically synchronizes changes from any connected device instantly.
+ * Helper to extract timestamp from record for conflict resolution (Newer timestamp wins)
  */
+function getRecordTimestamp(item: any): number {
+  const ts = item?.audit?.updatedAt || item?.audit?.createdAt || item?.approvedAt;
+  if (ts) {
+    const parsed = new Date(ts).getTime();
+    if (!isNaN(parsed)) return parsed;
+  }
+  return 0;
+}
+
 export function subscribeToAgencyData(
   callbacks: CloudDataCallbacks,
   currentLocalData?: {
@@ -163,6 +172,11 @@ export function subscribeToAgencyData(
     inventory: InventoryItem[];
     quotations: QuotationItem[];
     vouchers?: VoucherItem[];
+    returns?: ReturnRecord[];
+    movements?: InventoryMovement[];
+    employees?: EmployeeItem[];
+    attendance?: AttendanceRecord[];
+    payrolls?: PayrollRun[];
     agencySettings: AgencySettings;
   }
 ): () => void {
@@ -180,11 +194,9 @@ export function subscribeToAgencyData(
       }
 
       try {
-        // Check if cloud has initial settings or if this is first initialization
         try {
           const settingsSnap = await getDoc(doc(db, 'agency_settings', 'main_profile'));
           if (!settingsSnap.exists() && currentLocalData) {
-            // Seed cloud with initial records in background so second devices have base data
             await uploadAllDataToCloud(
               currentLocalData.sales,
               currentLocalData.purchases,
@@ -192,7 +204,12 @@ export function subscribeToAgencyData(
               currentLocalData.inventory,
               currentLocalData.quotations,
               currentLocalData.agencySettings,
-              currentLocalData.vouchers || []
+              currentLocalData.vouchers || [],
+              currentLocalData.returns || [],
+              currentLocalData.movements || [],
+              currentLocalData.employees || [],
+              currentLocalData.attendance || [],
+              currentLocalData.payrolls || []
             );
           }
         } catch (seedErr) {
@@ -201,117 +218,192 @@ export function subscribeToAgencyData(
 
         if (isCancelled) return;
 
-        // 1. Setup Real-time Listener for Sales
-        const salesUnsub = onSnapshot(
-          collection(db, 'sales'),
-          (snap) => {
-            const list: SaleItem[] = [];
-            snap.forEach((d) => list.push(d.data() as SaleItem));
-            if (callbacks.onSalesUpdate) callbacks.onSalesUpdate(list);
-            callbacks.onStatusChange?.('synced');
-          },
-          (err) => {
-            callbacks.onStatusChange?.('error', err.message);
-            handleFirestoreError(err, OperationType.GET, 'sales');
-          }
-        );
-        unsubs.push(salesUnsub);
-
-        // 2. Setup Real-time Listener for Purchases
-        const purchasesUnsub = onSnapshot(
-          collection(db, 'purchases'),
-          (snap) => {
-            const list: PurchaseItem[] = [];
-            snap.forEach((d) => list.push(d.data() as PurchaseItem));
-            if (callbacks.onPurchasesUpdate) callbacks.onPurchasesUpdate(list);
-            callbacks.onStatusChange?.('synced');
-          },
-          (err) => {
-            callbacks.onStatusChange?.('error', err.message);
-            handleFirestoreError(err, OperationType.GET, 'purchases');
-          }
-        );
-        unsubs.push(purchasesUnsub);
-
-        // 3. Setup Real-time Listener for Expenses
-        const expensesUnsub = onSnapshot(
-          collection(db, 'expenses'),
-          (snap) => {
-            const list: ExpenseItem[] = [];
-            snap.forEach((d) => list.push(d.data() as ExpenseItem));
-            if (callbacks.onExpensesUpdate) callbacks.onExpensesUpdate(list);
-            callbacks.onStatusChange?.('synced');
-          },
-          (err) => {
-            callbacks.onStatusChange?.('error', err.message);
-            handleFirestoreError(err, OperationType.GET, 'expenses');
-          }
-        );
-        unsubs.push(expensesUnsub);
-
-        // 4. Setup Real-time Listener for Inventory
-        const inventoryUnsub = onSnapshot(
-          collection(db, 'inventory'),
-          (snap) => {
-            const list: InventoryItem[] = [];
-            snap.forEach((d) => list.push(d.data() as InventoryItem));
-            if (callbacks.onInventoryUpdate) callbacks.onInventoryUpdate(list);
-            callbacks.onStatusChange?.('synced');
-          },
-          (err) => {
-            callbacks.onStatusChange?.('error', err.message);
-            handleFirestoreError(err, OperationType.GET, 'inventory');
-          }
-        );
-        unsubs.push(inventoryUnsub);
-
-        // 5. Setup Real-time Listener for Quotations
-        const quotesUnsub = onSnapshot(
-          collection(db, 'quotations'),
-          (snap) => {
-            const list: QuotationItem[] = [];
-            snap.forEach((d) => list.push(d.data() as QuotationItem));
-            if (callbacks.onQuotationsUpdate) callbacks.onQuotationsUpdate(list);
-            callbacks.onStatusChange?.('synced');
-          },
-          (err) => {
-            callbacks.onStatusChange?.('error', err.message);
-            handleFirestoreError(err, OperationType.GET, 'quotations');
-          }
-        );
-        unsubs.push(quotesUnsub);
-
-        // 6. Setup Real-time Listener for Vouchers (قبض وصرف)
-        const vouchersUnsub = onSnapshot(
-          collection(db, 'vouchers'),
-          (snap) => {
-            const list: VoucherItem[] = [];
-            snap.forEach((d) => list.push(d.data() as VoucherItem));
-            if (callbacks.onVouchersUpdate) callbacks.onVouchersUpdate(list);
-            callbacks.onStatusChange?.('synced');
-          },
-          (err) => {
-            callbacks.onStatusChange?.('error', err.message);
-            handleFirestoreError(err, OperationType.GET, 'vouchers');
-          }
-        );
-        unsubs.push(vouchersUnsub);
-
-        // 6. Setup Real-time Listener for Agency Settings
-        const settingsUnsub = onSnapshot(
-          doc(db, 'agency_settings', 'main_profile'),
-          (snap) => {
-            if (snap.exists()) {
-              const data = snap.data() as AgencySettings;
-              if (callbacks.onAgencySettingsUpdate) callbacks.onAgencySettingsUpdate(data);
+        unsubs.push(
+          onSnapshot(
+            collection(db, 'sales'),
+            (snap) => {
+              const list: SaleItem[] = [];
+              snap.forEach((d) => list.push(d.data() as SaleItem));
+              callbacks.onSalesUpdate?.(list);
+              callbacks.onStatusChange?.('synced');
+            },
+            (err) => {
+              callbacks.onStatusChange?.('error', err.message);
+              handleFirestoreError(err, OperationType.GET, 'sales');
             }
-            callbacks.onStatusChange?.('synced');
-          },
-          (err) => {
-            handleFirestoreError(err, OperationType.GET, 'agency_settings/main_profile');
-          }
+          )
         );
-        unsubs.push(settingsUnsub);
+
+        unsubs.push(
+          onSnapshot(
+            collection(db, 'purchases'),
+            (snap) => {
+              const list: PurchaseItem[] = [];
+              snap.forEach((d) => list.push(d.data() as PurchaseItem));
+              callbacks.onPurchasesUpdate?.(list);
+              callbacks.onStatusChange?.('synced');
+            },
+            (err) => {
+              callbacks.onStatusChange?.('error', err.message);
+              handleFirestoreError(err, OperationType.GET, 'purchases');
+            }
+          )
+        );
+
+        unsubs.push(
+          onSnapshot(
+            collection(db, 'expenses'),
+            (snap) => {
+              const list: ExpenseItem[] = [];
+              snap.forEach((d) => list.push(d.data() as ExpenseItem));
+              callbacks.onExpensesUpdate?.(list);
+              callbacks.onStatusChange?.('synced');
+            },
+            (err) => {
+              callbacks.onStatusChange?.('error', err.message);
+              handleFirestoreError(err, OperationType.GET, 'expenses');
+            }
+          )
+        );
+
+        unsubs.push(
+          onSnapshot(
+            collection(db, 'inventory'),
+            (snap) => {
+              const list: InventoryItem[] = [];
+              snap.forEach((d) => list.push(d.data() as InventoryItem));
+              callbacks.onInventoryUpdate?.(list);
+              callbacks.onStatusChange?.('synced');
+            },
+            (err) => {
+              callbacks.onStatusChange?.('error', err.message);
+              handleFirestoreError(err, OperationType.GET, 'inventory');
+            }
+          )
+        );
+
+        unsubs.push(
+          onSnapshot(
+            collection(db, 'quotations'),
+            (snap) => {
+              const list: QuotationItem[] = [];
+              snap.forEach((d) => list.push(d.data() as QuotationItem));
+              callbacks.onQuotationsUpdate?.(list);
+              callbacks.onStatusChange?.('synced');
+            },
+            (err) => {
+              callbacks.onStatusChange?.('error', err.message);
+              handleFirestoreError(err, OperationType.GET, 'quotations');
+            }
+          )
+        );
+
+        unsubs.push(
+          onSnapshot(
+            collection(db, 'vouchers'),
+            (snap) => {
+              const list: VoucherItem[] = [];
+              snap.forEach((d) => list.push(d.data() as VoucherItem));
+              callbacks.onVouchersUpdate?.(list);
+              callbacks.onStatusChange?.('synced');
+            },
+            (err) => {
+              callbacks.onStatusChange?.('error', err.message);
+              handleFirestoreError(err, OperationType.GET, 'vouchers');
+            }
+          )
+        );
+
+        unsubs.push(
+          onSnapshot(
+            collection(db, 'returns'),
+            (snap) => {
+              const list: ReturnRecord[] = [];
+              snap.forEach((d) => list.push(d.data() as ReturnRecord));
+              callbacks.onReturnsUpdate?.(list);
+              callbacks.onStatusChange?.('synced');
+            },
+            (err) => {
+              handleFirestoreError(err, OperationType.GET, 'returns');
+            }
+          )
+        );
+
+        unsubs.push(
+          onSnapshot(
+            collection(db, 'inventory_movements'),
+            (snap) => {
+              const list: InventoryMovement[] = [];
+              snap.forEach((d) => list.push(d.data() as InventoryMovement));
+              callbacks.onMovementsUpdate?.(list);
+              callbacks.onStatusChange?.('synced');
+            },
+            (err) => {
+              handleFirestoreError(err, OperationType.GET, 'inventory_movements');
+            }
+          )
+        );
+
+        unsubs.push(
+          onSnapshot(
+            collection(db, 'employees'),
+            (snap) => {
+              const list: EmployeeItem[] = [];
+              snap.forEach((d) => list.push(d.data() as EmployeeItem));
+              callbacks.onEmployeesUpdate?.(list);
+              callbacks.onStatusChange?.('synced');
+            },
+            (err) => {
+              handleFirestoreError(err, OperationType.GET, 'employees');
+            }
+          )
+        );
+
+        unsubs.push(
+          onSnapshot(
+            collection(db, 'attendance'),
+            (snap) => {
+              const list: AttendanceRecord[] = [];
+              snap.forEach((d) => list.push(d.data() as AttendanceRecord));
+              callbacks.onAttendanceUpdate?.(list);
+              callbacks.onStatusChange?.('synced');
+            },
+            (err) => {
+              handleFirestoreError(err, OperationType.GET, 'attendance');
+            }
+          )
+        );
+
+        unsubs.push(
+          onSnapshot(
+            collection(db, 'payrolls'),
+            (snap) => {
+              const list: PayrollRun[] = [];
+              snap.forEach((d) => list.push(d.data() as PayrollRun));
+              callbacks.onPayrollsUpdate?.(list);
+              callbacks.onStatusChange?.('synced');
+            },
+            (err) => {
+              handleFirestoreError(err, OperationType.GET, 'payrolls');
+            }
+          )
+        );
+
+        unsubs.push(
+          onSnapshot(
+            doc(db, 'agency_settings', 'main_profile'),
+            (snap) => {
+              if (snap.exists()) {
+                const data = snap.data() as AgencySettings;
+                callbacks.onAgencySettingsUpdate?.(data);
+              }
+              callbacks.onStatusChange?.('synced');
+            },
+            (err) => {
+              handleFirestoreError(err, OperationType.GET, 'agency_settings/main_profile');
+            }
+          )
+        );
 
         callbacks.onStatusChange?.('synced');
       } catch (err: any) {
@@ -330,163 +422,119 @@ export function subscribeToAgencyData(
   };
 }
 
-// Write/Delete Operations with Automatic Cloud Propagation
-
-export async function cloudSaveSale(item: SaleItem): Promise<{ success: boolean; error?: string }> {
+async function saveDocToCollection<T extends { id: string }>(
+  colName: string,
+  item: T
+): Promise<{ success: boolean; error?: string }> {
   try {
     const user = await ensureAuthSession();
     if (!user) return { success: false, error: 'غير مسجل الدخول' };
     const id = sanitizeId(item.id);
-    await setDoc(doc(db, 'sales', id), stripUndefined(item), { merge: true });
+    await setDoc(doc(db, colName, id), stripUndefined(item), { merge: true });
     return { success: true };
   } catch (err: any) {
-    handleFirestoreError(err, OperationType.WRITE, `sales/${sanitizeId(item.id)}`);
-    return { success: false, error: err?.message || 'فشل حفظ الفاتورة سحابياً' };
+    handleFirestoreError(err, OperationType.WRITE, `${colName}/${sanitizeId(item.id)}`);
+    return { success: false, error: err?.message || 'فشل الحفظ سحابياً' };
   }
 }
 
-export async function cloudDeleteSale(id: string): Promise<{ success: boolean; error?: string }> {
+async function deleteDocFromCollection(
+  colName: string,
+  id: string
+): Promise<{ success: boolean; error?: string }> {
   try {
     const user = await ensureAuthSession();
     if (!user) return { success: false, error: 'غير مسجل الدخول' };
-    await deleteDoc(doc(db, 'sales', sanitizeId(id)));
+    await deleteDoc(doc(db, colName, sanitizeId(id)));
     return { success: true };
   } catch (err: any) {
-    handleFirestoreError(err, OperationType.DELETE, `sales/${sanitizeId(id)}`);
-    return { success: false, error: err?.message || 'فشل حذف الفاتورة سحابياً' };
+    handleFirestoreError(err, OperationType.DELETE, `${colName}/${sanitizeId(id)}`);
+    return { success: false, error: err?.message || 'فشل الحذف سحابياً' };
   }
 }
 
-export async function cloudSavePurchase(item: PurchaseItem): Promise<{ success: boolean; error?: string }> {
-  try {
-    const user = await ensureAuthSession();
-    if (!user) return { success: false, error: 'غير مسجل الدخول' };
-    const id = sanitizeId(item.id);
-    await setDoc(doc(db, 'purchases', id), stripUndefined(item), { merge: true });
-    return { success: true };
-  } catch (err: any) {
-    handleFirestoreError(err, OperationType.WRITE, `purchases/${sanitizeId(item.id)}`);
-    return { success: false, error: err?.message || 'فشل حفظ فاتورة الشراء سحابياً' };
-  }
-}
+export const cloudSaveSale = (item: SaleItem) => saveDocToCollection('sales', item);
+export const cloudDeleteSale = (id: string) => deleteDocFromCollection('sales', id);
 
-export async function cloudDeletePurchase(id: string): Promise<{ success: boolean; error?: string }> {
-  try {
-    const user = await ensureAuthSession();
-    if (!user) return { success: false, error: 'غير مسجل الدخول' };
-    await deleteDoc(doc(db, 'purchases', sanitizeId(id)));
-    return { success: true };
-  } catch (err: any) {
-    handleFirestoreError(err, OperationType.DELETE, `purchases/${sanitizeId(id)}`);
-    return { success: false, error: err?.message || 'فشل حذف فاتورة الشراء سحابياً' };
-  }
-}
+export const cloudSavePurchase = (item: PurchaseItem) => saveDocToCollection('purchases', item);
+export const cloudDeletePurchase = (id: string) => deleteDocFromCollection('purchases', id);
 
-export async function cloudSaveExpense(item: ExpenseItem): Promise<{ success: boolean; error?: string }> {
-  try {
-    const user = await ensureAuthSession();
-    if (!user) return { success: false, error: 'غير مسجل الدخول' };
-    const id = sanitizeId(item.id);
-    await setDoc(doc(db, 'expenses', id), stripUndefined(item), { merge: true });
-    return { success: true };
-  } catch (err: any) {
-    handleFirestoreError(err, OperationType.WRITE, `expenses/${sanitizeId(item.id)}`);
-    return { success: false, error: err?.message || 'فشل حفظ المصروف سحابياً' };
-  }
-}
+export const cloudSaveExpense = (item: ExpenseItem) => saveDocToCollection('expenses', item);
+export const cloudDeleteExpense = (id: string) => deleteDocFromCollection('expenses', id);
 
-export async function cloudDeleteExpense(id: string): Promise<{ success: boolean; error?: string }> {
-  try {
-    const user = await ensureAuthSession();
-    if (!user) return { success: false, error: 'غير مسجل الدخول' };
-    await deleteDoc(doc(db, 'expenses', sanitizeId(id)));
-    return { success: true };
-  } catch (err: any) {
-    handleFirestoreError(err, OperationType.DELETE, `expenses/${sanitizeId(id)}`);
-    return { success: false, error: err?.message || 'فشل حذف المصروف سحابياً' };
-  }
-}
+export const cloudSaveInventory = (item: InventoryItem) => saveDocToCollection('inventory', item);
+export const cloudDeleteInventory = (id: string) => deleteDocFromCollection('inventory', id);
 
-export async function cloudSaveInventory(item: InventoryItem): Promise<{ success: boolean; error?: string }> {
-  try {
-    const user = await ensureAuthSession();
-    if (!user) return { success: false, error: 'غير مسجل الدخول' };
-    const id = sanitizeId(item.id);
-    await setDoc(doc(db, 'inventory', id), stripUndefined(item), { merge: true });
-    return { success: true };
-  } catch (err: any) {
-    handleFirestoreError(err, OperationType.WRITE, `inventory/${sanitizeId(item.id)}`);
-    return { success: false, error: err?.message || 'فشل حفظ الصنف بالمخزون سحابياً' };
-  }
-}
+export const cloudSaveQuotation = (item: QuotationItem) => saveDocToCollection('quotations', item);
+export const cloudDeleteQuotation = (id: string) => deleteDocFromCollection('quotations', id);
 
-export async function cloudDeleteInventory(id: string): Promise<{ success: boolean; error?: string }> {
-  try {
-    const user = await ensureAuthSession();
-    if (!user) return { success: false, error: 'غير مسجل الدخول' };
-    await deleteDoc(doc(db, 'inventory', sanitizeId(id)));
-    return { success: true };
-  } catch (err: any) {
-    handleFirestoreError(err, OperationType.DELETE, `inventory/${sanitizeId(id)}`);
-    return { success: false, error: err?.message || 'فشل حذف الصنف بالمخزون سحابياً' };
-  }
-}
+export const cloudSaveVoucher = (item: VoucherItem) => saveDocToCollection('vouchers', item);
+export const cloudDeleteVoucher = (id: string) => deleteDocFromCollection('vouchers', id);
 
-export async function cloudSaveQuotation(item: QuotationItem): Promise<{ success: boolean; error?: string }> {
-  try {
-    const user = await ensureAuthSession();
-    if (!user) return { success: false, error: 'غير مسجل الدخول' };
-    const id = sanitizeId(item.id);
-    await setDoc(doc(db, 'quotations', id), stripUndefined(item), { merge: true });
-    return { success: true };
-  } catch (err: any) {
-    handleFirestoreError(err, OperationType.WRITE, `quotations/${sanitizeId(item.id)}`);
-    return { success: false, error: err?.message || 'فشل حفظ عرض السعر سحابياً' };
-  }
-}
+export const cloudSaveReturn = (item: ReturnRecord) => saveDocToCollection('returns', item);
+export const cloudDeleteReturn = (id: string) => deleteDocFromCollection('returns', id);
 
-export async function cloudDeleteQuotation(id: string): Promise<{ success: boolean; error?: string }> {
-  try {
-    const user = await ensureAuthSession();
-    if (!user) return { success: false, error: 'غير مسجل الدخول' };
-    await deleteDoc(doc(db, 'quotations', sanitizeId(id)));
-    return { success: true };
-  } catch (err: any) {
-    handleFirestoreError(err, OperationType.DELETE, `quotations/${sanitizeId(id)}`);
-    return { success: false, error: err?.message || 'فشل حذف عرض السعر سحابياً' };
-  }
-}
+export const cloudSaveMovement = (item: InventoryMovement) => saveDocToCollection('inventory_movements', item);
+export const cloudDeleteMovement = (id: string) => deleteDocFromCollection('inventory_movements', id);
 
-export async function cloudSaveVoucher(item: VoucherItem): Promise<{ success: boolean; error?: string }> {
-  try {
-    const user = await ensureAuthSession();
-    if (!user) return { success: false, error: 'غير مسجل الدخول' };
-    const id = sanitizeId(item.id);
-    await setDoc(doc(db, 'vouchers', id), stripUndefined(item), { merge: true });
-    return { success: true };
-  } catch (err: any) {
-    handleFirestoreError(err, OperationType.WRITE, `vouchers/${sanitizeId(item.id)}`);
-    return { success: false, error: err?.message || 'فشل حفظ السند سحابياً' };
-  }
-}
+export const cloudSaveEmployee = (item: EmployeeItem) => saveDocToCollection('employees', item);
+export const cloudDeleteEmployee = (id: string) => deleteDocFromCollection('employees', id);
 
-export async function cloudDeleteVoucher(id: string): Promise<{ success: boolean; error?: string }> {
-  try {
-    const user = await ensureAuthSession();
-    if (!user) return { success: false, error: 'غير مسجل الدخول' };
-    await deleteDoc(doc(db, 'vouchers', sanitizeId(id)));
-    return { success: true };
-  } catch (err: any) {
-    handleFirestoreError(err, OperationType.DELETE, `vouchers/${sanitizeId(id)}`);
-    return { success: false, error: err?.message || 'فشل حذف السند سحابياً' };
-  }
-}
+export const cloudSaveAttendance = (item: AttendanceRecord) => saveDocToCollection('attendance', item);
+export const cloudDeleteAttendance = (id: string) => deleteDocFromCollection('attendance', id);
+
+export const cloudSavePayroll = (item: PayrollRun) => saveDocToCollection('payrolls', item);
+export const cloudDeletePayroll = (id: string) => deleteDocFromCollection('payrolls', id);
 
 export async function cloudSaveAgencySettings(settings: AgencySettings): Promise<{ success: boolean; error?: string }> {
   try {
     const user = await ensureAuthSession();
     if (!user) return { success: false, error: 'غير مسجل الدخول' };
-    await setDoc(doc(db, 'agency_settings', 'main_profile'), stripUndefined(settings), { merge: true });
+
+    // إضافة قائمة الإيميلات المصرح لها لدعم قواعد الأمان في Firestore
+    const authorizedEmails = Array.from(
+      new Set(
+        [
+          settings.ownerEmail,
+          settings.userProfile?.email,
+          ...(settings.collaborators || []).map((c) => c.email),
+        ]
+          .filter(Boolean)
+          .map((e) => String(e).toLowerCase().trim())
+      )
+    );
+    const adminEmails = Array.from(
+      new Set(
+        [
+          settings.ownerEmail,
+          ...(settings.collaborators || [])
+            .filter((c) => c.role.includes('مالك') || c.role.includes('Owner') || c.role.includes('مدير') || c.role.includes('Admin'))
+            .map((c) => c.email),
+        ]
+          .filter(Boolean)
+          .map((e) => String(e).toLowerCase().trim())
+      )
+    );
+
+    const payload = {
+      ...settings,
+      authorizedEmails,
+      adminEmails,
+    };
+
+    await setDoc(doc(db, 'agency_settings', 'main_profile'), stripUndefined(payload), { merge: true });
+
+    // حفظ هوية العرض العامة المختصرة لبوابة الدخول فقط (بدون الرقم الضريبي ولا بيانات الموظفين)
+    await setDoc(
+      doc(db, 'public_branding', 'main'),
+      stripUndefined({
+        agencyName: settings.agencyName,
+        agencySubtitle: settings.agencySubtitle,
+        agencyLogoUrl: settings.agencyLogoUrl,
+      }),
+      { merge: true }
+    ).catch(() => {});
+
     return { success: true };
   } catch (err: any) {
     handleFirestoreError(err, OperationType.WRITE, 'agency_settings/main_profile');
@@ -494,33 +542,25 @@ export async function cloudSaveAgencySettings(settings: AgencySettings): Promise
   }
 }
 
-/**
- * Subscribes to agency branding and profile settings in real-time.
- * Accessible publicly so the Login Gate (AuthGate), page title, and favicon
- * reflect the customized agency brand immediately on page load before login.
- */
 export function subscribeToPublicAgencySettings(
-  onSettingsUpdate: (settings: AgencySettings) => void
+  onSettingsUpdate: (settings: Partial<AgencySettings>) => void
 ): Unsubscribe {
   return onSnapshot(
-    doc(db, 'agency_settings', 'main_profile'),
+    doc(db, 'public_branding', 'main'),
     (snap) => {
       if (snap.exists()) {
-        const data = snap.data() as AgencySettings;
+        const data = snap.data() as Partial<AgencySettings>;
         if (data && (data.agencyName || data.agencyLogoUrl)) {
           onSettingsUpdate(data);
         }
       }
     },
-    (err) => {
-      console.warn('Public agency branding sync note:', err);
+    () => {
+      // ignore if unauthenticated or not yet created
     }
   );
 }
 
-/**
- * Upload all local records to Firestore in batches (for migration/initial sync).
- */
 export async function uploadAllDataToCloud(
   sales: SaleItem[],
   purchases: PurchaseItem[],
@@ -528,7 +568,12 @@ export async function uploadAllDataToCloud(
   inventory: InventoryItem[],
   quotations: QuotationItem[],
   agencySettings: AgencySettings,
-  vouchers: VoucherItem[] = []
+  vouchers: VoucherItem[] = [],
+  returns: ReturnRecord[] = [],
+  movements: InventoryMovement[] = [],
+  employees: EmployeeItem[] = [],
+  attendance: AttendanceRecord[] = [],
+  payrolls: PayrollRun[] = []
 ): Promise<void> {
   const user = await ensureAuthSession();
   if (!user) {
@@ -536,71 +581,34 @@ export async function uploadAllDataToCloud(
   }
 
   try {
-    // 1. Settings
-    await setDoc(doc(db, 'agency_settings', 'main_profile'), stripUndefined(agencySettings), { merge: true });
+    await cloudSaveAgencySettings(agencySettings);
 
-    // 2. Sales in batch
-    if (sales.length > 0) {
+    const commitCollectionBatch = async <T extends { id: string }>(colName: string, items: T[]) => {
+      if (items.length === 0) return;
       const batch = writeBatch(db);
-      sales.forEach((s) => {
-        batch.set(doc(db, 'sales', sanitizeId(s.id)), stripUndefined(s), { merge: true });
+      items.forEach((item) => {
+        batch.set(doc(db, colName, sanitizeId(item.id)), stripUndefined(item), { merge: true });
       });
       await batch.commit();
-    }
+    };
 
-    // 3. Purchases in batch
-    if (purchases.length > 0) {
-      const batch = writeBatch(db);
-      purchases.forEach((p) => {
-        batch.set(doc(db, 'purchases', sanitizeId(p.id)), stripUndefined(p), { merge: true });
-      });
-      await batch.commit();
-    }
-
-    // 4. Expenses in batch
-    if (expenses.length > 0) {
-      const batch = writeBatch(db);
-      expenses.forEach((e) => {
-        batch.set(doc(db, 'expenses', sanitizeId(e.id)), stripUndefined(e), { merge: true });
-      });
-      await batch.commit();
-    }
-
-    // 5. Inventory in batch
-    if (inventory.length > 0) {
-      const batch = writeBatch(db);
-      inventory.forEach((i) => {
-        batch.set(doc(db, 'inventory', sanitizeId(i.id)), stripUndefined(i), { merge: true });
-      });
-      await batch.commit();
-    }
-
-    // 6. Quotations in batch
-    if (quotations.length > 0) {
-      const batch = writeBatch(db);
-      quotations.forEach((q) => {
-        batch.set(doc(db, 'quotations', sanitizeId(q.id)), stripUndefined(q), { merge: true });
-      });
-      await batch.commit();
-    }
-
-    // 7. Vouchers in batch (سندات قبض وصرف)
-    if (vouchers.length > 0) {
-      const batch = writeBatch(db);
-      vouchers.forEach((v) => {
-        batch.set(doc(db, 'vouchers', sanitizeId(v.id)), stripUndefined(v), { merge: true });
-      });
-      await batch.commit();
-    }
+    await commitCollectionBatch('sales', sales);
+    await commitCollectionBatch('purchases', purchases);
+    await commitCollectionBatch('expenses', expenses);
+    await commitCollectionBatch('inventory', inventory);
+    await commitCollectionBatch('quotations', quotations);
+    await commitCollectionBatch('vouchers', vouchers);
+    await commitCollectionBatch('returns', returns);
+    await commitCollectionBatch('inventory_movements', movements);
+    await commitCollectionBatch('employees', employees);
+    await commitCollectionBatch('attendance', attendance);
+    await commitCollectionBatch('payrolls', payrolls);
   } catch (err: any) {
     handleFirestoreError(err, OperationType.WRITE, 'batch_upload');
     throw err;
   }
 }
 
-/**
- * Fetches all collections directly from Firestore cloud server.
- */
 export async function fetchAllCloudData(): Promise<{
   sales: SaleItem[];
   purchases: PurchaseItem[];
@@ -608,6 +616,11 @@ export async function fetchAllCloudData(): Promise<{
   inventory: InventoryItem[];
   quotations: QuotationItem[];
   vouchers: VoucherItem[];
+  returns: ReturnRecord[];
+  movements: InventoryMovement[];
+  employees: EmployeeItem[];
+  attendance: AttendanceRecord[];
+  payrolls: PayrollRun[];
   agencySettings: AgencySettings | null;
 }> {
   const user = await ensureAuthSession();
@@ -616,49 +629,62 @@ export async function fetchAllCloudData(): Promise<{
   }
 
   try {
-    const [salesSnap, purchasesSnap, expensesSnap, inventorySnap, quotesSnap, vouchersSnap, settingsSnap] =
-      await Promise.all([
-        getDocs(collection(db, 'sales')),
-        getDocs(collection(db, 'purchases')),
-        getDocs(collection(db, 'expenses')),
-        getDocs(collection(db, 'inventory')),
-        getDocs(collection(db, 'quotations')),
-        getDocs(collection(db, 'vouchers')),
-        getDoc(doc(db, 'agency_settings', 'main_profile')),
-      ]);
+    const [
+      salesSnap,
+      purchasesSnap,
+      expensesSnap,
+      inventorySnap,
+      quotesSnap,
+      vouchersSnap,
+      returnsSnap,
+      movementsSnap,
+      employeesSnap,
+      attendanceSnap,
+      payrollsSnap,
+      settingsSnap,
+    ] = await Promise.all([
+      getDocs(collection(db, 'sales')),
+      getDocs(collection(db, 'purchases')),
+      getDocs(collection(db, 'expenses')),
+      getDocs(collection(db, 'inventory')),
+      getDocs(collection(db, 'quotations')),
+      getDocs(collection(db, 'vouchers')),
+      getDocs(collection(db, 'returns')),
+      getDocs(collection(db, 'inventory_movements')),
+      getDocs(collection(db, 'employees')),
+      getDocs(collection(db, 'attendance')),
+      getDocs(collection(db, 'payrolls')),
+      getDoc(doc(db, 'agency_settings', 'main_profile')),
+    ]);
 
-    const sales: SaleItem[] = [];
-    salesSnap.forEach((d) => sales.push(d.data() as SaleItem));
+    const extract = <T>(snap: any): T[] => {
+      const arr: T[] = [];
+      snap.forEach((d: any) => arr.push(d.data() as T));
+      return arr;
+    };
 
-    const purchases: PurchaseItem[] = [];
-    purchasesSnap.forEach((d) => purchases.push(d.data() as PurchaseItem));
+    const agencySettings = settingsSnap.exists() ? (settingsSnap.data() as AgencySettings) : null;
 
-    const expenses: ExpenseItem[] = [];
-    expensesSnap.forEach((d) => expenses.push(d.data() as ExpenseItem));
-
-    const inventory: InventoryItem[] = [];
-    inventorySnap.forEach((d) => inventory.push(d.data() as InventoryItem));
-
-    const quotations: QuotationItem[] = [];
-    quotesSnap.forEach((d) => quotations.push(d.data() as QuotationItem));
-
-    const vouchers: VoucherItem[] = [];
-    vouchersSnap.forEach((d) => vouchers.push(d.data() as VoucherItem));
-
-    const agencySettings = settingsSnap.exists()
-      ? (settingsSnap.data() as AgencySettings)
-      : null;
-
-    return { sales, purchases, expenses, inventory, quotations, vouchers, agencySettings };
+    return {
+      sales: extract<SaleItem>(salesSnap),
+      purchases: extract<PurchaseItem>(purchasesSnap),
+      expenses: extract<ExpenseItem>(expensesSnap),
+      inventory: extract<InventoryItem>(inventorySnap),
+      quotations: extract<QuotationItem>(quotesSnap),
+      vouchers: extract<VoucherItem>(vouchersSnap),
+      returns: extract<ReturnRecord>(returnsSnap),
+      movements: extract<InventoryMovement>(movementsSnap),
+      employees: extract<EmployeeItem>(employeesSnap),
+      attendance: extract<AttendanceRecord>(attendanceSnap),
+      payrolls: extract<PayrollRun>(payrollsSnap),
+      agencySettings,
+    };
   } catch (err: any) {
     handleFirestoreError(err, OperationType.GET, 'all_collections');
     throw err;
   }
 }
 
-/**
- * Tests live connection to Firestore and returns latency and auth info.
- */
 export async function testCloudConnection(): Promise<{
   ok: boolean;
   latencyMs: number;
@@ -695,96 +721,78 @@ export async function testCloudConnection(): Promise<{
 }
 
 /**
- * Merges local items with cloud items so changes made on this device or another device are combined without losing records.
+ * دمج ذكي يعتمد على الطابع الزمني الأحدث (Timestamp-Aware Conflict Resolution)
+ * لمنع فقدان التعديلات الحديثة عند العمل أوفلاين من جهازين
  */
-export async function syncMergeLocalAndCloud(
-  localData: {
-    sales: SaleItem[];
-    purchases: PurchaseItem[];
-    expenses: ExpenseItem[];
-    inventory: InventoryItem[];
-    quotations: QuotationItem[];
-    vouchers?: VoucherItem[];
-    agencySettings: AgencySettings;
-  }
-): Promise<{
+export async function syncMergeLocalAndCloud(localData: {
+  sales: SaleItem[];
+  purchases: PurchaseItem[];
+  expenses: ExpenseItem[];
+  inventory: InventoryItem[];
+  quotations: QuotationItem[];
+  vouchers?: VoucherItem[];
+  returns?: ReturnRecord[];
+  movements?: InventoryMovement[];
+  employees?: EmployeeItem[];
+  attendance?: AttendanceRecord[];
+  payrolls?: PayrollRun[];
+  agencySettings: AgencySettings;
+}): Promise<{
   sales: SaleItem[];
   purchases: PurchaseItem[];
   expenses: ExpenseItem[];
   inventory: InventoryItem[];
   quotations: QuotationItem[];
   vouchers: VoucherItem[];
+  returns: ReturnRecord[];
+  movements: InventoryMovement[];
+  employees: EmployeeItem[];
+  attendance: AttendanceRecord[];
+  payrolls: PayrollRun[];
   agencySettings: AgencySettings;
   mergedCount: number;
 }> {
   const cloudData = await fetchAllCloudData();
   let mergedCount = 0;
 
-  // Merge Sales:
-  const salesMap = new Map<string, SaleItem>();
-  cloudData.sales.forEach((s) => salesMap.set(s.id, s));
-  for (const localSale of localData.sales) {
-    if (!salesMap.has(localSale.id)) {
-      salesMap.set(localSale.id, localSale);
-      await cloudSaveSale(localSale);
-      mergedCount++;
+  const mergeCollection = async <T extends { id: string }>(
+    cloudList: T[],
+    localList: T[],
+    saveFn: (item: T) => Promise<any>
+  ): Promise<T[]> => {
+    const map = new Map<string, T>();
+    cloudList.forEach((c) => map.set(c.id, c));
+    for (const localItem of localList) {
+      const existingCloud = map.get(localItem.id);
+      if (!existingCloud) {
+        map.set(localItem.id, localItem);
+        await saveFn(localItem);
+        mergedCount++;
+      } else {
+        // حل التعارض: إذا كانت النسخة المحلية أحدث زمنياً من السحابية، نعتمد المحلية ونرفعها
+        const localTs = getRecordTimestamp(localItem);
+        const cloudTs = getRecordTimestamp(existingCloud);
+        if (localTs > cloudTs) {
+          map.set(localItem.id, localItem);
+          await saveFn(localItem);
+          mergedCount++;
+        }
+      }
     }
-  }
+    return Array.from(map.values());
+  };
 
-  // Merge Quotations:
-  const quotesMap = new Map<string, QuotationItem>();
-  cloudData.quotations.forEach((q) => quotesMap.set(q.id, q));
-  for (const localQuote of localData.quotations) {
-    if (!quotesMap.has(localQuote.id)) {
-      quotesMap.set(localQuote.id, localQuote);
-      await cloudSaveQuotation(localQuote);
-      mergedCount++;
-    }
-  }
-
-  // Merge Purchases:
-  const purchasesMap = new Map<string, PurchaseItem>();
-  cloudData.purchases.forEach((p) => purchasesMap.set(p.id, p));
-  for (const localP of localData.purchases) {
-    if (!purchasesMap.has(localP.id)) {
-      purchasesMap.set(localP.id, localP);
-      await cloudSavePurchase(localP);
-      mergedCount++;
-    }
-  }
-
-  // Merge Expenses:
-  const expensesMap = new Map<string, ExpenseItem>();
-  cloudData.expenses.forEach((e) => expensesMap.set(e.id, e));
-  for (const localE of localData.expenses) {
-    if (!expensesMap.has(localE.id)) {
-      expensesMap.set(localE.id, localE);
-      await cloudSaveExpense(localE);
-      mergedCount++;
-    }
-  }
-
-  // Merge Inventory:
-  const invMap = new Map<string, InventoryItem>();
-  cloudData.inventory.forEach((i) => invMap.set(i.id, i));
-  for (const localI of localData.inventory) {
-    if (!invMap.has(localI.id)) {
-      invMap.set(localI.id, localI);
-      await cloudSaveInventory(localI);
-      mergedCount++;
-    }
-  }
-
-  // Merge Vouchers (سندات القبض والصرف):
-  const vouchersMap = new Map<string, VoucherItem>();
-  (cloudData.vouchers || []).forEach((v) => vouchersMap.set(v.id, v));
-  for (const localV of (localData.vouchers || [])) {
-    if (!vouchersMap.has(localV.id)) {
-      vouchersMap.set(localV.id, localV);
-      await cloudSaveVoucher(localV);
-      mergedCount++;
-    }
-  }
+  const sales = await mergeCollection(cloudData.sales, localData.sales, cloudSaveSale);
+  const quotations = await mergeCollection(cloudData.quotations, localData.quotations, cloudSaveQuotation);
+  const purchases = await mergeCollection(cloudData.purchases, localData.purchases, cloudSavePurchase);
+  const expenses = await mergeCollection(cloudData.expenses, localData.expenses, cloudSaveExpense);
+  const inventory = await mergeCollection(cloudData.inventory, localData.inventory, cloudSaveInventory);
+  const vouchers = await mergeCollection(cloudData.vouchers || [], localData.vouchers || [], cloudSaveVoucher);
+  const returns = await mergeCollection(cloudData.returns || [], localData.returns || [], cloudSaveReturn);
+  const movements = await mergeCollection(cloudData.movements || [], localData.movements || [], cloudSaveMovement);
+  const employees = await mergeCollection(cloudData.employees || [], localData.employees || [], cloudSaveEmployee);
+  const attendance = await mergeCollection(cloudData.attendance || [], localData.attendance || [], cloudSaveAttendance);
+  const payrolls = await mergeCollection(cloudData.payrolls || [], localData.payrolls || [], cloudSavePayroll);
 
   const finalSettings = cloudData.agencySettings || localData.agencySettings;
   if (!cloudData.agencySettings) {
@@ -792,12 +800,17 @@ export async function syncMergeLocalAndCloud(
   }
 
   return {
-    sales: Array.from(salesMap.values()),
-    quotations: Array.from(quotesMap.values()),
-    purchases: Array.from(purchasesMap.values()),
-    expenses: Array.from(expensesMap.values()),
-    inventory: Array.from(invMap.values()),
-    vouchers: Array.from(vouchersMap.values()),
+    sales,
+    quotations,
+    purchases,
+    expenses,
+    inventory,
+    vouchers,
+    returns,
+    movements,
+    employees,
+    attendance,
+    payrolls,
     agencySettings: finalSettings,
     mergedCount,
   };

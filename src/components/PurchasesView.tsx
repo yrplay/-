@@ -277,11 +277,12 @@ export const PurchasesView: React.FC<PurchasesViewProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const existingNos = purchases.map((x) => x.supplierInvoiceNo);
     if (editingItem) {
-      const updated = computePurchaseDerivedFields({ ...formData, id: editingItem.id });
+      const updated = computePurchaseDerivedFields({ ...formData, id: editingItem.id }, existingNos);
       onUpdatePurchase(updated);
     } else {
-      const newItem = computePurchaseDerivedFields(formData);
+      const newItem = computePurchaseDerivedFields(formData, existingNos);
       onAddPurchase(newItem);
     }
     setIsModalOpen(false);
