@@ -44,9 +44,10 @@ service cloud.firestore {
       );
     }
 
-    // وثيقة فحص الاتصال فقط للمستخدمين المسجلين
+    // وثيقة فحص الاتصال عند بدء التشغيل
     match /test/{docId} {
-      allow read, write: if isAuthenticatedUser();
+      allow read: if true;
+      allow write: if isAuthenticatedUser();
     }
 
     // المجموعات المحاسبية والتشغيلية مقيدة حصرياً بأعضاء فريق الوكالة المصرح لهم

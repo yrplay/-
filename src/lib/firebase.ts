@@ -8,15 +8,49 @@ import {
   User,
   Auth,
 } from 'firebase/auth';
-import { getFirestore, Firestore, doc, getDocFromServer } from 'firebase/firestore';
+import {
+  getFirestore,
+  initializeFirestore,
+  setLogLevel,
+  Firestore,
+  doc,
+  getDocFromServer,
+} from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
+
+// Suppress internal Firestore transport/WebChannel timeout warning logs while keeping explicit app error handlers active
+try {
+  setLogLevel('silent');
+} catch {
+  // ignore
+}
 
 const app: FirebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
 export const auth: Auth = getAuth(app);
 
-export const db: Firestore = (firebaseConfig as any).firestoreDatabaseId
-  ? getFirestore(app, (firebaseConfig as any).firestoreDatabaseId)
-  : getFirestore(app);
+const databaseId: string | undefined = (firebaseConfig as any).firestoreDatabaseId || undefined;
+
+function createFirestoreInstance(): Firestore {
+  try {
+    return databaseId
+      ? initializeFirestore(
+          app,
+          {
+            experimentalAutoDetectLongPolling: true,
+            ignoreUndefinedProperties: true,
+          },
+          databaseId
+        )
+      : initializeFirestore(app, {
+          experimentalAutoDetectLongPolling: true,
+          ignoreUndefinedProperties: true,
+        });
+  } catch {
+    return databaseId ? getFirestore(app, databaseId) : getFirestore(app);
+  }
+}
+
+export const db: Firestore = createFirestoreInstance();
 
 export async function testConnection() {
   try {
